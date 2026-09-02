@@ -14,7 +14,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install Qt 6.8.3
+      - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
@@ -24,83 +24,62 @@ jobs:
           add-tools-to-path: true
           set-env: true
 
-      - name: Show Qt installation
+      - name: Configure
         shell: pwsh
         run: |
-          Write-Host "QT_ROOT_DIR = $env:QT_ROOT_DIR"
-          if (-not $env:QT_ROOT_DIR) {
-            Write-Error "QT_ROOT_DIR was not set by install-qt-action."
-            exit 1
-          }
-          $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
-          Write-Host "windeployqt = $windeployqt"
-          if (-not (Test-Path $windeployqt)) {
-            Write-Error "windeployqt.exe was not found."
-            exit 1
-          }
-
-      - name: Configure CMake
-        shell: pwsh
-        run: |
-          cmake -S . -B build `
-            -G "Visual Studio 17 2022" `
-            -A x64 `
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
 
       - name: Build Release
         shell: pwsh
-        run: |
-          cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel
 
-      - name: Verify application
-        shell: pwsh
-        run: |
-          if (-not (Test-Path "build\Release\StatProAnalytics.exe")) {
-            Write-Error "StatProAnalytics.exe was not created."
-            exit 1
-          }
-
-      - name: Deploy Qt runtime with windeployqt
+      - name: Deploy Qt runtime
         shell: pwsh
         run: |
           $exe = (Resolve-Path "build\Release\StatProAnalytics.exe").Path
           $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
 
-          & $windeployqt --release --compiler-runtime --verbose 2 $exe
-
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "windeployqt failed with exit code $LASTEXITCODE."
-            exit $LASTEXITCODE
+          if (-not (Test-Path $windeployqt)) {
+            throw "windeployqt.exe not found: $windeployqt"
           }
 
-      - name: Verify Qt runtime files
+          & $windeployqt --release --compiler-runtime --no-translations $exe
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "windeployqt failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify deployed files
         shell: pwsh
         run: |
-          $release = "build\Release"
+          $dir = (Resolve-Path "build\Release").Path
+
           $required = @(
             "StatProAnalytics.exe",
             "Qt6Core.dll",
             "Qt6Gui.dll",
             "Qt6Widgets.dll"
           )
-          $missing = @()
 
-          foreach ($file in $required) {
-            $path = Join-Path $release $file
-            if (Test-Path $path) {
-              Write-Host "FOUND: $file"
-            } else {
-              Write-Host "MISSING: $file"
-              $missing += $file
+          foreach ($name in $required) {
+            $p = Join-Path $dir $name
+            if (-not (Test-Path $p)) {
+              throw "Required deployed file is missing: $p"
             }
+            Write-Host "OK: $name"
           }
 
-          if ($missing.Count -gt 0) {
-            Write-Error "Missing required runtime files: $($missing -join ', ')"
-            exit 1
+          foreach ($pluginDir in @("platforms")) {
+            $p = Join-Path $dir $pluginDir
+            if (-not (Test-Path $p)) {
+              throw "Required Qt plugin directory is missing: $p"
+            }
+            Write-Host "OK: $pluginDir"
           }
 
-          Write-Host "Qt runtime verification passed."
+          Write-Host "Complete deployed application directory:"
+          Get-ChildItem $dir -Recurse | Select-Object FullName,Length
 
       - name: Install Inno Setup
         shell: pwsh
@@ -110,30 +89,26 @@ jobs:
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            Write-Error "Inno Setup compiler was not found."
-            exit 1
-          }
           & $iscc "installer\StatPro-Analytics.iss"
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Inno Setup failed with exit code $LASTEXITCODE."
-            exit $LASTEXITCODE
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
           }
 
-      - name: Verify installer
+      - name: Verify installer contents
         shell: pwsh
         run: |
-          $installer = "Output\StatPro-Analytics-Setup.exe"
-          if (-not (Test-Path $installer)) {
-            Write-Error "Installer was not created."
-            exit 1
-          }
-          Write-Host "Installer created successfully."
-          Get-Item $installer | Format-List FullName,Length
+          $installer = (Resolve-Path "Output\StatPro-Analytics-Setup.exe").Path
 
-      - name: Upload Windows installer
+          if (-not (Test-Path $installer)) {
+            throw "Installer was not created."
+          }
+
+          Write-Host "Installer:"
+          Get-Item $installer | Select-Object FullName,Length
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: StatPro-Analytics-Setup
+          name: StatPro-Analytics-Setup-v0.1.1
           path: Output/StatPro-Analytics-Setup.exe
           if-no-files-found: error
