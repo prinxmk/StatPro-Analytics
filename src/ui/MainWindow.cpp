@@ -1,6 +1,9 @@
 #include "MainWindow.h"
 #include "../data/CsvImporter.h"
 #include "../data/ProjectManager.h"
+#include <QApplication>
+#include <QDockWidget>
+#include <QTableWidget>
 #include <QAction>
 #include <QCloseEvent>
 #include <QFileDialog>
@@ -13,7 +16,6 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
-#include <QTableWidget>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QTreeWidget>
