@@ -1,11 +1,9 @@
 #include "MainWindow.h"
 #include "../data/CsvImporter.h"
 #include "../data/ProjectManager.h"
-#include <QApplication>
-#include <QDockWidget>
-#include <QTableWidget>
 #include <QAction>
 #include <QCloseEvent>
+#include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -16,6 +14,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QTableWidget>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QTreeWidget>
@@ -69,7 +68,57 @@ void MainWindow::updateTitle(){setWindowTitle(QString("StatPro Analytics — %1%
 bool MainWindow::confirmSaveIfDirty(){if(!m_state.dirty())return true;const auto ans=QMessageBox::warning(this,"Unsaved Changes","This project has unsaved changes.",QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel);if(ans==QMessageBox::Save){saveProject();return !m_state.dirty();}return ans==QMessageBox::Discard;}
 void MainWindow::closeEvent(QCloseEvent* e){if(confirmSaveIfDirty())e->accept();else e->ignore();}
 void MainWindow::applyTheme(){
- if(m_state.darkMode())setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#20242a;color:#e8eaed}QToolBar{background:#292e36;border:1px solid #3b414b;padding:5px;spacing:4px}QToolButton{color:#e8eaed;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#3a414c}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit{background:#252a31;color:#e8eaed;border:1px solid #414752}QHeaderView::section{background:#303640;color:#e8eaed;padding:5px}QLabel#ProjectTitle{font-size:18px;font-weight:600;padding:3px})");
- else setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#f4f6f8;color:#20242a}QToolBar{background:#ffffff;border:1px solid #d8dde3;padding:5px;spacing:4px}QToolButton{padding:7px 9px;border-radius:5px}QToolButton:hover{background:#e9eef5}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit{background:#ffffff;color:#20242a;border:1px solid #d8dde3}QHeaderView::section{background:#eef1f4;padding:5px}QLabel#ProjectTitle{font-size:18px;font-weight:600;padding:3px})");
-}
-}
+    if(m_state.darkMode()) {
+        setStyleSheet(R"(
+            QMainWindow { background:#20242a; color:#e8eaed; }
+            QDockWidget { background:#252a31; color:#e8eaed; }
+            QDockWidget::title { background:#2d333b; color:#ffffff; padding:7px 9px; font-weight:600; }
+            QTabWidget::pane { background:#20242a; border:1px solid #3b414b; }
+            QTabBar::tab { background:#2b3038; color:#dfe3e8; padding:8px 14px; border:1px solid #3b414b; }
+            QTabBar::tab:selected { background:#3a414c; color:#ffffff; }
+            QToolBar { background:#292e36; border:1px solid #3b414b; padding:5px; spacing:4px; }
+            QToolButton { color:#f2f4f7; background:transparent; padding:7px 9px; border-radius:5px; }
+            QToolButton:hover { background:#3a414c; }
+            QToolButton:pressed { background:#454d58; }
+            QLabel { color:#e8eaed; }
+            QLabel#ProjectTitle { color:#ffffff; font-size:18px; font-weight:600; padding:5px 3px; }
+            QLineEdit, QPlainTextEdit, QListWidget, QTreeWidget, QTableWidget {
+                background:#252a31; color:#f1f3f5; border:1px solid #414752; selection-background-color:#3f4854; selection-color:#ffffff;
+            }
+            QLineEdit { padding:6px; }
+            QPushButton { background:#303640; color:#ffffff; border:1px solid #4a525e; padding:6px 12px; border-radius:5px; }
+            QPushButton:hover { background:#3a414c; }
+            QPushButton:pressed { background:#454d58; }
+            QHeaderView::section { background:#303640; color:#ffffff; padding:6px; border:1px solid #414752; font-weight:600; }
+            QTableCornerButton::section { background:#303640; border:1px solid #414752; }
+            QStatusBar { background:#292e36; color:#e8eaed; }
+            QScrollBar:vertical, QScrollBar:horizontal { background:#20242a; }
+        )");
+    } else {
+        setStyleSheet(R"(
+            QMainWindow { background:#f4f6f8; color:#20242a; }
+            QDockWidget { background:#ffffff; color:#20242a; }
+            QDockWidget::title { background:#e7ebef; color:#1f2933; padding:7px 9px; font-weight:600; }
+            QTabWidget::pane { background:#ffffff; border:1px solid #cfd6dd; }
+            QTabBar::tab { background:#e8edf2; color:#27313b; padding:8px 14px; border:1px solid #cfd6dd; }
+            QTabBar::tab:selected { background:#ffffff; color:#111827; font-weight:600; }
+            QToolBar { background:#ffffff; border:1px solid #d8dde3; padding:5px; spacing:4px; }
+            QToolButton { color:#1f2933; background:transparent; padding:7px 9px; border-radius:5px; }
+            QToolButton:hover { background:#e9eef5; }
+            QToolButton:pressed { background:#dce4ec; }
+            QLabel { color:#20242a; }
+            QLabel#ProjectTitle { color:#18212b; font-size:18px; font-weight:600; padding:5px 3px; }
+            QLineEdit, QPlainTextEdit, QListWidget, QTreeWidget, QTableWidget {
+                background:#ffffff; color:#20242a; border:1px solid #cbd3db; selection-background-color:#dbe8f5; selection-color:#111827;
+            }
+            QLineEdit { padding:6px; }
+            QPushButton { background:#ffffff; color:#20242a; border:1px solid #bfc8d1; padding:6px 12px; border-radius:5px; }
+            QPushButton:hover { background:#eef2f6; }
+            QPushButton:pressed { background:#e1e7ed; }
+            QHeaderView::section { background:#eef1f4; color:#20242a; padding:6px; border:1px solid #cbd3db; font-weight:600; }
+            QTableCornerButton::section { background:#eef1f4; border:1px solid #cbd3db; }
+            QStatusBar { background:#ffffff; color:#303942; border-top:1px solid #d8dde3; }
+            QScrollBar:vertical, QScrollBar:horizontal { background:#f4f6f8; }
+        )");
+    }
+}}
