@@ -11,10 +11,10 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Install Qt
+      - name: Install Qt 6.8.3
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
@@ -24,14 +24,33 @@ jobs:
           add-tools-to-path: true
           set-env: true
 
+      - name: Show Qt installation
+        shell: pwsh
+        run: |
+          Write-Host "QT_ROOT_DIR = $env:QT_ROOT_DIR"
+          if (-not $env:QT_ROOT_DIR) {
+            Write-Error "QT_ROOT_DIR was not set by install-qt-action."
+            exit 1
+          }
+          $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
+          Write-Host "windeployqt = $windeployqt"
+          if (-not (Test-Path $windeployqt)) {
+            Write-Error "windeployqt.exe was not found."
+            exit 1
+          }
+
       - name: Configure CMake
-        run: >
-          cmake -S . -B build
-          -G "Visual Studio 17 2022"
-          -A x64
+        shell: pwsh
+        run: |
+          cmake -S . -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
 
       - name: Build Release
-        run: cmake --build build --config Release --parallel
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel
 
       - name: Verify application
         shell: pwsh
@@ -41,14 +60,47 @@ jobs:
             exit 1
           }
 
-      - name: Deploy Qt runtime
+      - name: Deploy Qt runtime with windeployqt
         shell: pwsh
         run: |
-          windeployqt --release --compiler-runtime "build\Release\StatProAnalytics.exe"
+          $exe = (Resolve-Path "build\Release\StatProAnalytics.exe").Path
+          $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
+
+          & $windeployqt --release --compiler-runtime --verbose 2 $exe
+
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "windeployqt failed."
+            Write-Error "windeployqt failed with exit code $LASTEXITCODE."
             exit $LASTEXITCODE
           }
+
+      - name: Verify Qt runtime files
+        shell: pwsh
+        run: |
+          $release = "build\Release"
+          $required = @(
+            "StatProAnalytics.exe",
+            "Qt6Core.dll",
+            "Qt6Gui.dll",
+            "Qt6Widgets.dll"
+          )
+          $missing = @()
+
+          foreach ($file in $required) {
+            $path = Join-Path $release $file
+            if (Test-Path $path) {
+              Write-Host "FOUND: $file"
+            } else {
+              Write-Host "MISSING: $file"
+              $missing += $file
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            Write-Error "Missing required runtime files: $($missing -join ', ')"
+            exit 1
+          }
+
+          Write-Host "Qt runtime verification passed."
 
       - name: Install Inno Setup
         shell: pwsh
@@ -57,13 +109,29 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "installer\StatPro-Analytics.iss"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Error "Inno Setup compiler was not found."
+            exit 1
+          }
+          & $iscc "installer\StatPro-Analytics.iss"
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Inno Setup failed."
+            Write-Error "Inno Setup failed with exit code $LASTEXITCODE."
             exit $LASTEXITCODE
           }
 
-      - name: Upload installer
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $installer = "Output\StatPro-Analytics-Setup.exe"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer was not created."
+            exit 1
+          }
+          Write-Host "Installer created successfully."
+          Get-Item $installer | Format-List FullName,Length
+
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: StatPro-Analytics-Setup
