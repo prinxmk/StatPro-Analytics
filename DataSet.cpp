@@ -57,18 +57,50 @@ bool DataSet::setValue(int r, int c, const QVariant& v) {
     return true;
 }
 
-bool DataSet::setVariable(int c, const Variable& v) {
-    if (c < 0 || c >= columnCount() || v.name.trimmed().isEmpty()) return false;
-    for (int i = 0; i < columnCount(); ++i) if (i != c && m_variables[i].name.compare(v.name, Qt::CaseInsensitive) == 0) return false;
-    for (int r = 0; r < rowCount(); ++r) {
-        const QString text = m_rows[r][c].toString().trimmed(); if (text.isEmpty()) continue;
-        bool ok=true;
-        if(v.type==VariableType::Numeric){text.toDouble(&ok);}
-        else if(v.type==VariableType::Date){ok=QDate::fromString(text,Qt::ISODate).isValid();}
-        else if(v.type==VariableType::Boolean){ok=text.compare("true",Qt::CaseInsensitive)==0||text.compare("false",Qt::CaseInsensitive)==0||text=="0"||text=="1";}
-        if(!ok) return false;
+bool DataSet::setVariable(int c, const Variable& v, QString* error) {
+    if (c < 0 || c >= columnCount()) {
+        if (error) *error = "Invalid variable index.";
+        return false;
     }
-    m_variables[c] = v; return true;
+    if (v.name.trimmed().isEmpty()) {
+        if (error) *error = "Variable name cannot be empty.";
+        return false;
+    }
+    for (int i = 0; i < columnCount(); ++i) {
+        if (i != c && m_variables[i].name.compare(v.name, Qt::CaseInsensitive) == 0) {
+            if (error) *error = QString("The variable name '%1' is already in use.").arg(v.name);
+            return false;
+        }
+    }
+    for (int r = 0; r < rowCount(); ++r) {
+        const QString text = m_rows[r][c].toString().trimmed();
+        if (text.isEmpty()) continue;
+        QString valueError;
+        // Validate against the NEW variable definition, not the old one.
+        switch (v.type) {
+        case VariableType::Numeric: {
+            bool ok=false; text.toDouble(&ok);
+            if (!ok) valueError = QString("'%1' is not a valid numeric value.").arg(text);
+            break;
+        }
+        case VariableType::Date:
+            if (!(QDate::fromString(text, Qt::ISODate).isValid() || QDate::fromString(text, "yyyy-MM-dd").isValid()))
+                valueError = QString("'%1' is not a valid date. Use YYYY-MM-DD.").arg(text);
+            break;
+        case VariableType::Boolean:
+            if (!(text.compare("true", Qt::CaseInsensitive) == 0 || text.compare("false", Qt::CaseInsensitive) == 0 || text == "0" || text == "1"))
+                valueError = QString("'%1' is not a valid Boolean value. Use true/false or 1/0.").arg(text);
+            break;
+        case VariableType::String:
+            break;
+        }
+        if (!valueError.isEmpty()) {
+            if (error) *error = QString("Row %1: %2").arg(r + 1).arg(valueError);
+            return false;
+        }
+    }
+    m_variables[c] = v;
+    return true;
 }
 
 bool DataSet::addVariable(const Variable& v, const QVariant& def) {
@@ -110,10 +142,17 @@ QVector<QVariant> DataSet::row(int rowIndex) const { return m_rows.at(rowIndex);
 bool DataSet::sortByColumn(int column, bool ascending) {
     if (column < 0 || column >= columnCount()) return false;
     std::stable_sort(m_rows.begin(), m_rows.end(), [column, ascending](const auto& a, const auto& b) {
-        const QString av = a[column].toString(); const QString bv = b[column].toString();
-        bool aNum=false,bNum=false; const double ad=av.toDouble(&aNum), bd=bv.toDouble(&bNum);
-        bool less = (aNum && bNum) ? ad < bd : QString::localeAwareCompare(av,bv) < 0;
-        return ascending ? less : !less && av != bv;
+        const QString av = a[column].toString();
+        const QString bv = b[column].toString();
+        bool aNum=false,bNum=false;
+        const double ad=av.toDouble(&aNum), bd=bv.toDouble(&bNum);
+        if (aNum && bNum) {
+            if (ad == bd) return false;
+            return ascending ? ad < bd : ad > bd;
+        }
+        const int cmp = QString::localeAwareCompare(av, bv);
+        if (cmp == 0) return false;
+        return ascending ? cmp < 0 : cmp > 0;
     });
     return true;
 }

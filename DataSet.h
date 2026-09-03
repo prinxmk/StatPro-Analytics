@@ -26,7 +26,7 @@ public:
     const QVariant& value(int row, int column) const;
     bool setValue(int row, int column, const QVariant& value);
     bool setColumns(const QVector<Variable>& columns);
-    bool setVariable(int column, const Variable& variable);
+    bool setVariable(int column, const Variable& variable, QString* error = nullptr);
     bool addVariable(const Variable& variable, const QVariant& defaultValue = {});
     bool removeVariable(int column);
     bool renameVariable(int column, const QString& name);

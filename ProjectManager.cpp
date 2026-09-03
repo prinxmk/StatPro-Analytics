@@ -16,6 +16,6 @@ bool ProjectManager::openProject(const QString& path,QString& name,DataSet& data
     QJsonParseError pe;auto doc=QJsonDocument::fromJson(f.readAll(),&pe);if(pe.error!=QJsonParseError::NoError||!doc.isObject()){if(error)*error="Invalid StatPro project.";return false;}
     auto root=doc.object();name=root["projectName"].toString("Untitled Project");QVector<Variable> vars;
     for(const auto& item:root["variables"].toArray()){auto o=item.toObject();Variable v;v.name=o["name"].toString();v.label=o["label"].toString();v.type=variableTypeFromName(o["type"].toString());v.format=o["format"].toString();for(const auto& x:o["valueLabels"].toArray())v.valueLabels<<x.toString();for(const auto& x:o["missingValues"].toArray())v.missingValues<<x.toString();vars.push_back(v);}
-    DataSet d;d.setColumns(vars);for(const auto& item:root["data"].toArray()){QVector<QVariant> row;for(const auto& x:item.toArray())row<<x.toString();d.addRow(row);}data=d;return true;
+    DataSet d;d.setColumns(vars);for(const auto& item:root["data"].toArray()){QVector<QVariant> row;for(const auto& x:item.toArray())row<<x.toString();d.appendRow(row);}data=d;return true;
 }
 }
