@@ -21,6 +21,9 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QFrame>
+#include <QMenu>
+#include <QMenuBar>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -36,6 +39,7 @@
 #include <QCheckBox>
 #include <QUndoCommand>
 #include <algorithm>
+#include <functional>
 
 namespace StatPro {
 
@@ -48,174 +52,284 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.3.2"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.3.3"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
+    connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
 
+
 void MainWindow::buildInterface(){
-    buildRibbon();
-    auto* central=new QWidget; auto* layout=new QVBoxLayout(central); layout->setContentsMargins(8,6,8,6); layout->setSpacing(6);
-    m_projectTitle=new QLabel; m_projectTitle->setObjectName("ProjectTitle"); layout->addWidget(m_projectTitle);
-    buildDataCommandBar(layout);
-    auto* filterRow=new QHBoxLayout; m_filterEdit=new QLineEdit; m_filterEdit->setPlaceholderText("Filter rows… (text search or: age > 30, sex == Male)");
-    auto* apply=new QPushButton("Apply"); auto* clear=new QPushButton("Clear"); auto* replace=new QPushButton("Find / Replace");
-    filterRow->addWidget(new QLabel("Data filter:")); filterRow->addWidget(m_filterEdit,1); filterRow->addWidget(apply); filterRow->addWidget(clear); filterRow->addWidget(replace); layout->addLayout(filterRow);
-    connect(apply,&QPushButton::clicked,this,&MainWindow::applyFilter); connect(clear,&QPushButton::clicked,this,&MainWindow::clearFilter); connect(replace,&QPushButton::clicked,this,&MainWindow::replaceText);
-    m_tabs=new QTabWidget; m_grid=new QTableWidget; m_grid->setAlternatingRowColors(true); m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection); m_grid->setSelectionBehavior(QAbstractItemView::SelectItems); m_grid->setEditTriggers(QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed|QAbstractItemView::AnyKeyPressed); m_grid->setSortingEnabled(false);
+    buildMenus();
+
+    auto* central=new QWidget;
+    auto* layout=new QVBoxLayout(central);
+    layout->setContentsMargins(8,6,8,6);
+    layout->setSpacing(6);
+
+    auto* filterRow=new QHBoxLayout;
+    m_filterEdit=new QLineEdit;
+    m_filterEdit->setPlaceholderText("Filter rows… (text search or: age > 30, sex == Male)");
+    auto* apply=new QPushButton("Apply");
+    auto* clear=new QPushButton("Clear");
+    auto* replace=new QPushButton("Find / Replace");
+    filterRow->addWidget(new QLabel("Data filter:"));
+    filterRow->addWidget(m_filterEdit,1);
+    filterRow->addWidget(apply);
+    filterRow->addWidget(clear);
+    filterRow->addWidget(replace);
+    layout->addLayout(filterRow);
+
+    connect(apply,&QPushButton::clicked,this,&MainWindow::applyFilter);
+    connect(clear,&QPushButton::clicked,this,&MainWindow::clearFilter);
+    connect(replace,&QPushButton::clicked,this,&MainWindow::replaceText);
+
+    m_tabs=new QTabWidget;
+    m_grid=new QTableWidget;
+    m_grid->setAlternatingRowColors(true);
+    m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_grid->setSelectionBehavior(QAbstractItemView::SelectItems);
+    m_grid->setEditTriggers(QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed|QAbstractItemView::AnyKeyPressed);
+    m_grid->setSortingEnabled(false);
     m_grid->setContextMenuPolicy(Qt::ActionsContextMenu);
     m_grid->verticalHeader()->setDefaultSectionSize(24);
     m_grid->horizontalHeader()->setSectionsMovable(false);
     m_grid->horizontalHeader()->setSortIndicatorShown(false);
     m_grid->horizontalHeader()->setSectionsClickable(true);
+    m_grid->setCornerButtonEnabled(true);
+    m_grid->setWordWrap(false);
+    m_grid->setTabKeyNavigation(true);
+
     connect(m_grid->horizontalHeader(), &QHeaderView::sectionClicked, this, [this](int c){
         if (c < 0 || c >= m_grid->columnCount()) return;
         m_grid->clearSelection();
         m_grid->selectColumn(c);
         if (m_grid->rowCount() > 0) m_grid->setCurrentCell(0, c);
         selectVariableColumn(c);
+        updateStatus();
     });
-    connect(m_grid, &QTableWidget::currentCellChanged, this, [this](int, int c, int, int){ if(c>=0) selectVariableColumn(c); });
-    m_grid->setCornerButtonEnabled(true);
-    m_grid->setWordWrap(false);
-    m_grid->setTabKeyNavigation(true);
+    connect(m_grid, &QTableWidget::currentCellChanged, this, [this](int, int c, int, int){
+        if(c>=0) selectVariableColumn(c);
+        updateStatus();
+    });
+    connect(m_grid, &QTableWidget::itemSelectionChanged, this, &MainWindow::updateStatus);
+
     m_tabs->addTab(m_grid,"Data Editor");
     connect(m_grid,&QTableWidget::cellChanged,this,&MainWindow::cellChanged);
-    m_output=new QPlainTextEdit; m_output->setReadOnly(true); m_tabs->addTab(m_output,"Results / Output"); layout->addWidget(m_tabs,1); setCentralWidget(central);
-    buildVariablesPanel(); buildPropertiesPanel();
 
-    auto makeShortcut=[this](const QKeySequence& key, auto fn){
-        auto* a=new QAction(this); a->setShortcut(key); a->setShortcutContext(Qt::ApplicationShortcut); addAction(a);
-        connect(a,&QAction::triggered,this,fn);
-    };
-    makeShortcut(QKeySequence::Copy,[this]{copySelection();});
-    makeShortcut(QKeySequence::Paste,[this]{pasteSelection();});
-    makeShortcut(QKeySequence::Undo,[this]{undo();});
-    makeShortcut(QKeySequence::Redo,[this]{redo();});
+    m_output=new QPlainTextEdit;
+    m_output->setReadOnly(true);
+    m_tabs->addTab(m_output,"Results / Output");
+    layout->addWidget(m_tabs,1);
+    setCentralWidget(central);
 
-    updateTitle(); updateStatus();
+    buildVariablesPanel();
+    buildPropertiesPanel();
+    buildDataCommandPanel();
+
+    if(m_propertiesDock && m_commandsDock){
+        splitDockWidget(m_propertiesDock,m_commandsDock,Qt::Vertical);
+        resizeDocks({m_propertiesDock,m_commandsDock},{420,360},Qt::Vertical);
+    }
+
+    buildStatusBar();
+
+
+    updateTitle();
+    updateStatus();
 }
 
 
-void MainWindow::buildDataCommandBar(QVBoxLayout* parentLayout){
-    auto* box=new QGroupBox("Data Editor Commands");
-    box->setObjectName("DataCommandBox");
-    auto* row=new QHBoxLayout(box);
-    row->setContentsMargins(6,5,6,5);
-    row->setSpacing(5);
-    auto add=[this,row](const QString& text, auto fn){
-        auto* b=new QPushButton(text);
-        b->setMinimumHeight(28);
-        connect(b,&QPushButton::clicked,this,fn);
-        row->addWidget(b);
-        return b;
-    };
-    add("Add Variable",[this]{addVariable();});
-    add("Edit Variable",[this]{editVariable();});
-    add("Delete Variable",[this]{deleteVariable();});
-    row->addSpacing(8);
-    add("Add Row",[this]{addRow();});
-    add("Insert Row",[this]{insertRow();});
-    add("Delete Row(s)",[this]{deleteRows();});
-    row->addSpacing(8);
-    add("Copy",[this]{copySelection();});
-    add("Paste",[this]{pasteSelection();});
-    row->addSpacing(8);
-    add("Sort ↑",[this]{sortAscending();});
-    add("Sort ↓",[this]{sortDescending();});
-    add("Dataset Info",[this]{showDatasetInfo();});
-    row->addStretch(1);
-    parentLayout->addWidget(box);
-}
 
-void MainWindow::buildRibbon(){
-    auto addAction = [this](QToolBar* tb, const QString& text, auto fn, const QKeySequence& shortcut = {}) {
-        QAction* action = tb->addAction(text);
-        if (!shortcut.isEmpty()) action->setShortcut(shortcut);
-        connect(action, &QAction::triggered, this, fn);
+void MainWindow::buildMenus(){
+    auto addAction=[this](QMenu* menu,const QString& text,auto fn,const QKeySequence& shortcut=QKeySequence()){
+        QAction* action=menu->addAction(text);
+        if(!shortcut.isEmpty())action->setShortcut(shortcut);
+        connect(action,&QAction::triggered,this,fn);
         return action;
     };
 
-    // File / project toolbar
-    auto* fileBar = addToolBar("Project");
-    fileBar->setObjectName("ProjectToolbar");
-    fileBar->setMovable(false);
-    fileBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    addAction(fileBar, "New", [this]{newProject();});
-    addAction(fileBar, "Open", [this]{openProject();}, QKeySequence::Open);
-    addAction(fileBar, "Save", [this]{saveProject();}, QKeySequence::Save);
-    fileBar->addSeparator();
-    addAction(fileBar, "Import Data", [this]{importCsv();});
-    addAction(fileBar, "Export Data", [this]{exportCsv();});
-    fileBar->addSeparator();
-    addAction(fileBar, "Light / Dark", [this]{toggleTheme();});
+    auto* fileMenu=menuBar()->addMenu("&File");
+    addAction(fileMenu,"New Project",[this]{newProject();},QKeySequence::New);
+    addAction(fileMenu,"Open Project…",[this]{openProject();},QKeySequence::Open);
+    addAction(fileMenu,"Save Project",[this]{saveProject();},QKeySequence::Save);
+    addAction(fileMenu,"Save Project As…",[this]{saveProjectAs();},QKeySequence::SaveAs);
+    fileMenu->addSeparator();
+    addAction(fileMenu,"Import Data…",[this]{importCsv();});
+    addAction(fileMenu,"Export Data…",[this]{exportCsv();});
+    fileMenu->addSeparator();
+    addAction(fileMenu,"Exit",[this]{close();},QKeySequence::Quit);
 
-    addToolBarBreak();
+    auto* dataMenu=menuBar()->addMenu("&Data");
 
-    // Data editor toolbar. Keep all editing operations together and visible.
-    auto* dataBar = addToolBar("Data Editor");
-    dataBar->setObjectName("DataEditorToolbar");
-    dataBar->setMovable(false);
-    dataBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    addAction(dataBar, "Add Variable", [this]{addVariable();});
-    addAction(dataBar, "Edit Variable", [this]{editVariable();});
-    addAction(dataBar, "Delete Variable", [this]{deleteVariable();});
-    dataBar->addSeparator();
-    addAction(dataBar, "Add Row", [this]{addRow();}, QKeySequence(Qt::CTRL | Qt::Key_Insert));
-    addAction(dataBar, "Insert Row", [this]{insertRow();});
-    addAction(dataBar, "Delete Row(s)", [this]{deleteRows();});
-    dataBar->addSeparator();
-    addAction(dataBar, "Copy", [this]{copySelection();});
-    addAction(dataBar, "Paste", [this]{pasteSelection();});
-    addAction(dataBar, "Undo", [this]{undo();});
-    addAction(dataBar, "Redo", [this]{redo();});
-    dataBar->addSeparator();
-    addAction(dataBar, "Sort ↑", [this]{sortAscending();});
-    addAction(dataBar, "Sort ↓", [this]{sortDescending();});
-    addAction(dataBar, "Dataset Info", [this]{showDatasetInfo();});
+    auto* variableMenu=dataMenu->addMenu("Variables");
+    addAction(variableMenu,"Add Variable…",[this]{addVariable();});
+    addAction(variableMenu,"Edit Variable…",[this]{editVariable();});
+    addAction(variableMenu,"Delete Variable",[this]{deleteVariable();});
 
-    addToolBarBreak();
+    auto* rowMenu=dataMenu->addMenu("Rows");
+    addAction(rowMenu,"Add Row",[this]{addRow();},QKeySequence(Qt::CTRL | Qt::Key_Insert));
+    addAction(rowMenu,"Insert Row",[this]{insertRow();});
+    addAction(rowMenu,"Delete Selected Row(s)",[this]{deleteRows();});
 
-    // Analysis toolbar. Statistical procedures will be attached here in later phases.
-    auto* analysisBar = addToolBar("Analysis Modules");
-    analysisBar->setObjectName("AnalysisToolbar");
-    analysisBar->setMovable(false);
-    analysisBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    auto* clipboardMenu=dataMenu->addMenu("Clipboard");
+    addAction(clipboardMenu,"Copy",[this]{copySelection();},QKeySequence::Copy);
+    addAction(clipboardMenu,"Paste",[this]{pasteSelection();},QKeySequence::Paste);
+    clipboardMenu->addSeparator();
+    addAction(clipboardMenu,"Undo",[this]{undo();},QKeySequence::Undo);
+    addAction(clipboardMenu,"Redo",[this]{redo();},QKeySequence::Redo);
+
+    auto* sortMenu=dataMenu->addMenu("Sort");
+    addAction(sortMenu,"Ascending",[this]{sortAscending();});
+    addAction(sortMenu,"Descending",[this]{sortDescending();});
+
+    dataMenu->addSeparator();
+    addAction(dataMenu,"Find / Replace…",[this]{replaceText();});
+    addAction(dataMenu,"Dataset Information",[this]{showDatasetInfo();});
+
+    auto* analysisMenu=menuBar()->addMenu("&Analysis");
     for(const auto& group : QStringList{
             "Data","Cleaning","Transform","Describe","Tests","Regression",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
             "Machine Learning","Graphs","Diagnostics","Interpret","Reports"}) {
-        auto* a = analysisBar->addAction(group);
-        connect(a, &QAction::triggered, this, [this, group]{
+        auto* groupMenu=analysisMenu->addMenu(group);
+        QAction* placeholder=groupMenu->addAction(QString("Open %1 module").arg(group));
+        connect(placeholder,&QAction::triggered,this,[this,group]{
             m_output->appendPlainText("\n[" + group + "] module selected. Statistical procedures will be added in the analysis-engine phases.");
             m_tabs->setCurrentWidget(m_output);
+            statusBar()->showMessage(group + " module selected",3000);
         });
     }
+
+    auto* viewMenu=menuBar()->addMenu("&View");
+    addAction(viewMenu,"Light / Dark Theme",[this]{toggleTheme();});
+    viewMenu->addSeparator();
+
+    // Dock toggle actions are added after the docks exist in buildInterface().
+    connect(viewMenu,&QMenu::aboutToShow,this,[this,viewMenu]{
+        if(viewMenu->property("dockTogglesAdded").toBool())return;
+        viewMenu->addSeparator();
+        if(m_variablesDock)viewMenu->addAction(m_variablesDock->toggleViewAction());
+        if(m_propertiesDock)viewMenu->addAction(m_propertiesDock->toggleViewAction());
+        if(m_commandsDock)viewMenu->addAction(m_commandsDock->toggleViewAction());
+        viewMenu->setProperty("dockTogglesAdded",true);
+    });
 }
 
+
+
 void MainWindow::buildVariablesPanel(){
-    auto* dock=new QDockWidget("Variables / Elements",this);
+    m_variablesDock=new QDockWidget("Variables / Elements",this);
+    m_variablesDock->setObjectName("VariablesDock");
     auto* panel=new QWidget;
     auto* layout=new QVBoxLayout(panel);
     layout->setContentsMargins(5,5,5,5);
     layout->setSpacing(5);
+
     m_variables=new QListWidget;
     m_variables->setAlternatingRowColors(true);
     m_variables->setSelectionMode(QAbstractItemView::SingleSelection);
-    layout->addWidget(m_variables, 1);
+    layout->addWidget(m_variables,1);
+
     auto* buttons=new QHBoxLayout;
     auto* edit=new QPushButton("Edit");
     auto* remove=new QPushButton("Delete");
     buttons->addWidget(edit);
     buttons->addWidget(remove);
     layout->addLayout(buttons);
-    dock->setWidget(panel);
-    addDockWidget(Qt::LeftDockWidgetArea,dock);
-    connect(m_variables,&QListWidget::currentRowChanged,this,[this](int r){refreshProperties(r);});
+
+    m_variablesDock->setWidget(panel);
+    addDockWidget(Qt::LeftDockWidgetArea,m_variablesDock);
+
+    connect(m_variables,&QListWidget::currentRowChanged,this,[this](int r){
+        refreshProperties(r);
+        updateStatus();
+    });
     connect(m_variables,&QListWidget::itemDoubleClicked,this,[this](QListWidgetItem*){editVariable();});
     connect(edit,&QPushButton::clicked,this,&MainWindow::editVariable);
     connect(remove,&QPushButton::clicked,this,&MainWindow::deleteVariable);
 }
-void MainWindow::buildPropertiesPanel(){auto* dock=new QDockWidget("Properties",this);m_properties=new QTreeWidget;m_properties->setHeaderLabels({"Property","Value"});m_properties->setAlternatingRowColors(true);dock->setWidget(m_properties);addDockWidget(Qt::RightDockWidgetArea,dock);}
+
+void MainWindow::buildPropertiesPanel(){
+    m_propertiesDock=new QDockWidget("Properties",this);
+    m_propertiesDock->setObjectName("PropertiesDock");
+    m_properties=new QTreeWidget;
+    m_properties->setHeaderLabels({"Property","Value"});
+    m_properties->setAlternatingRowColors(true);
+    m_propertiesDock->setWidget(m_properties);
+    addDockWidget(Qt::RightDockWidgetArea,m_propertiesDock);
+}
+
+void MainWindow::buildDataCommandPanel(){
+    m_commandsDock=new QDockWidget("Data Editor Commands",this);
+    m_commandsDock->setObjectName("DataCommandsDock");
+    m_commandsDock->setAllowedAreas(Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea);
+
+    auto* panel=new QWidget;
+    auto* layout=new QVBoxLayout(panel);
+    layout->setContentsMargins(7,7,7,7);
+    layout->setSpacing(8);
+
+    auto addSection=[this,layout](const QString& title,const QList<QPair<QString,std::function<void()>>>& actions){
+        auto* box=new QGroupBox(title);
+        auto* boxLayout=new QVBoxLayout(box);
+        boxLayout->setContentsMargins(7,7,7,7);
+        boxLayout->setSpacing(5);
+        for(const auto& item:actions){
+            auto* button=new QPushButton(item.first);
+            button->setMinimumHeight(28);
+            connect(button,&QPushButton::clicked,this,item.second);
+            boxLayout->addWidget(button);
+        }
+        layout->addWidget(box);
+    };
+
+    addSection("Variables",{
+        {"Add Variable",[this]{addVariable();}},
+        {"Edit Variable",[this]{editVariable();}},
+        {"Delete Variable",[this]{deleteVariable();}}
+    });
+
+    addSection("Rows",{
+        {"Add Row",[this]{addRow();}},
+        {"Insert Row",[this]{insertRow();}},
+        {"Delete Row(s)",[this]{deleteRows();}}
+    });
+
+    addSection("Clipboard",{
+        {"Copy",[this]{copySelection();}},
+        {"Paste",[this]{pasteSelection();}},
+        {"Undo",[this]{undo();}},
+        {"Redo",[this]{redo();}}
+    });
+
+    addSection("Order & Dataset",{
+        {"Sort Ascending",[this]{sortAscending();}},
+        {"Sort Descending",[this]{sortDescending();}},
+        {"Dataset Info",[this]{showDatasetInfo();}}
+    });
+
+    layout->addStretch(1);
+    m_commandsDock->setWidget(panel);
+    addDockWidget(Qt::RightDockWidgetArea,m_commandsDock);
+}
+
+void MainWindow::buildStatusBar(){
+    auto* bar=statusBar();
+    bar->setSizeGripEnabled(true);
+
+    m_statusState=new QLabel("Ready");
+    m_statusRows=new QLabel("0 observations");
+    m_statusVariables=new QLabel("0 variables");
+    m_statusSelection=new QLabel("No selection");
+    m_statusMode=new QLabel("Offline");
+
+    for(auto* label : {m_statusRows,m_statusVariables,m_statusSelection,m_statusMode}){
+        label->setContentsMargins(8,0,8,0);
+        bar->addPermanentWidget(label);
+    }
+    bar->addWidget(m_statusState,1);
+}
+
 
 void MainWindow::newProject(){if(!confirmSaveIfDirty())return;m_data.clear();m_state.setProjectPath("");m_state.setProjectName("Untitled Project");m_state.setDirty(false);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();m_output->setPlainText("New project created.");}
 void MainWindow::openProject(){if(!confirmSaveIfDirty())return;const auto path=QFileDialog::getOpenFileName(this,"Open StatPro Project",{},"StatPro Project (*.stpro)");if(path.isEmpty())return;QString name,error;if(!ProjectManager::openProject(path,name,m_data,&error)){QMessageBox::critical(this,"Open Project",error);return;}m_state.setProjectPath(path);m_state.setProjectName(name);m_state.setDirty(false);m_state.addRecentProject(path);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();m_output->setPlainText("Project opened: "+path);}
@@ -451,12 +565,27 @@ void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataVi
 void MainWindow::applyFilter(){const QString q=m_filterEdit->text().trimmed();QVector<int> rows=m_data.filteredRows(q);refreshDataView(rows);statusBar()->showMessage(QString("%1 of %2 rows shown").arg(rows.size()).arg(m_data.rowCount()));}
 void MainWindow::clearFilter(){m_filterEdit->clear();refreshDataView();}
 void MainWindow::replaceText(){bool ok=false;const auto find=QInputDialog::getText(this,"Find / Replace","Find:",QLineEdit::Normal,"",&ok);if(!ok||find.isEmpty())return;const auto repl=QInputDialog::getText(this,"Find / Replace","Replace with:",QLineEdit::Normal,"",&ok);if(!ok)return;int count=0;for(int r=0;r<m_data.rowCount();++r)for(int c=0;c<m_data.columnCount();++c){auto s=m_data.value(r,c).toString();if(s.contains(find,Qt::CaseInsensitive)){s.replace(find,repl,Qt::CaseInsensitive);QString err;if(m_data.validateValue(c,s,&err)) {m_data.setValue(r,c,s);++count;}}}if(count){m_state.setDirty(true);refreshDataView();}m_output->setPlainText(QString("Find / Replace complete. %1 cells changed.").arg(count));}
-void MainWindow::updateTitle(){setWindowTitle(QString("StatPro Analytics 0.3.2 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));if(m_projectTitle)m_projectTitle->setText(m_state.projectName()+(m_state.dirty()?" *":""));}
-void MainWindow::updateStatus(){statusBar()->showMessage(QString("StatPro 0.3.2 • %1 observations • %2 variables • Ready • Offline mode").arg(m_data.rowCount()).arg(m_data.columnCount()));}
+void MainWindow::updateTitle(){
+    setWindowTitle(QString("StatPro Analytics 0.3.3 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+}
+
+void MainWindow::updateStatus(){
+    if(!m_statusRows || !m_statusVariables || !m_statusSelection || !m_statusState || !m_statusMode)return;
+
+    m_statusRows->setText(QString("%1 observations").arg(m_data.rowCount()));
+    m_statusVariables->setText(QString("%1 variables").arg(m_data.columnCount()));
+
+    int selected=0;
+    if(m_grid)selected=m_grid->selectedItems().size();
+    m_statusSelection->setText(selected>0 ? QString("%1 cell%2 selected").arg(selected).arg(selected==1?"":"s") : "No selection");
+
+    m_statusMode->setText("Offline");
+    m_statusState->setText(m_state.dirty() ? "Modified" : "Ready");
+}
 bool MainWindow::confirmSaveIfDirty(){if(!m_state.dirty())return true;const auto ans=QMessageBox::warning(this,"Unsaved Changes","This project has unsaved changes.",QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel);if(ans==QMessageBox::Save){saveProject();return !m_state.dirty();}return ans==QMessageBox::Discard;}
 void MainWindow::closeEvent(QCloseEvent* e){if(confirmSaveIfDirty())e->accept();else e->ignore();}
 void MainWindow::applyTheme(){
- if(m_state.darkMode())setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#20242a;color:#e8eaed}QToolBar{background:#292e36;border:1px solid #3b414b;padding:5px;spacing:4px}QToolButton{color:#e8eaed;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#3a414c}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#252a31;color:#e8eaed;border:1px solid #414752}QHeaderView::section{background:#303640;color:#e8eaed;padding:5px}QLabel#ProjectTitle{font-size:18px;font-weight:600;padding:3px}QPushButton{color:#e8eaed;background:#303640;border:1px solid #4b5360;padding:6px 12px;border-radius:4px}QGroupBox#DataCommandBox{border:1px solid #414752;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#3a414c})");
- else setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#f4f6f8;color:#20242a}QToolBar{background:#ffffff;border:1px solid #d8dde3;padding:5px;spacing:4px}QToolButton{color:#20242a;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#e9eef5}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#ffffff;color:#20242a;border:1px solid #d8dde3}QHeaderView::section{background:#eef1f4;color:#20242a;padding:5px}QLabel#ProjectTitle{font-size:18px;font-weight:600;padding:3px}QPushButton{color:#20242a;background:#ffffff;border:1px solid #b8c0c9;padding:6px 12px;border-radius:4px}QGroupBox#DataCommandBox{border:1px solid #d8dde3;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#e9eef5})");
+ if(m_state.darkMode())setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#20242a;color:#e8eaed}QToolBar{background:#292e36;border:1px solid #3b414b;padding:5px;spacing:4px}QToolButton{color:#e8eaed;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#3a414c}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#252a31;color:#e8eaed;border:1px solid #414752}QHeaderView::section{background:#303640;color:#e8eaed;padding:5px}QPushButton{color:#e8eaed;background:#303640;border:1px solid #4b5360;padding:6px 12px;border-radius:4px}QMenuBar,QMenu{background:#292e36;color:#e8eaed}QMenuBar::item:selected,QMenu::item:selected{background:#3a414c}QStatusBar{background:#292e36;color:#e8eaed;border-top:1px solid #3b414b}QDockWidget::title{background:#292e36;color:#e8eaed;padding:6px}QGroupBox{border:1px solid #414752;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#3a414c})");
+ else setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#f4f6f8;color:#20242a}QToolBar{background:#ffffff;border:1px solid #d8dde3;padding:5px;spacing:4px}QToolButton{color:#20242a;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#e9eef5}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#ffffff;color:#20242a;border:1px solid #d8dde3}QHeaderView::section{background:#eef1f4;color:#20242a;padding:5px}QPushButton{color:#20242a;background:#ffffff;border:1px solid #b8c0c9;padding:6px 12px;border-radius:4px}QMenuBar,QMenu{background:#ffffff;color:#20242a}QMenuBar::item:selected,QMenu::item:selected{background:#e9eef5}QStatusBar{background:#ffffff;color:#20242a;border-top:1px solid #d8dde3}QDockWidget::title{background:#eef1f4;color:#20242a;padding:6px}QGroupBox{border:1px solid #d8dde3;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#e9eef5})");
 }
 }
