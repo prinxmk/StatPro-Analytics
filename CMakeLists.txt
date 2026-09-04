@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(StatProAnalytics VERSION 0.3.3 LANGUAGES CXX)
+project(StatProAnalytics VERSION 0.4.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -12,6 +12,7 @@ qt_add_executable(StatProAnalytics
     src/data/DataSet.h src/data/DataSet.cpp
     src/data/CsvImporter.h src/data/CsvImporter.cpp
     src/data/ProjectManager.h src/data/ProjectManager.cpp
+    src/analysis/AnalysisEngine.h src/analysis/AnalysisEngine.cpp
     src/ui/MainWindow.h src/ui/MainWindow.cpp
 )
 target_link_libraries(StatProAnalytics PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)

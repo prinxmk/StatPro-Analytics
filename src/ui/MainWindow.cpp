@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "../data/CsvImporter.h"
 #include "../data/ProjectManager.h"
+#include "../analysis/AnalysisEngine.h"
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
@@ -52,7 +53,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.3.3"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.0"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -187,8 +188,13 @@ void MainWindow::buildMenus(){
     addAction(dataMenu,"Dataset Information",[this]{showDatasetInfo();});
 
     auto* analysisMenu=menuBar()->addMenu("&Analysis");
+    auto* describeMenu=analysisMenu->addMenu("Describe");
+    addAction(describeMenu,"Descriptive Statistics…",[this]{runDescriptiveStatistics();});
+    describeMenu->addSeparator();
+    describeMenu->addAction("Frequencies (coming soon)");
+    describeMenu->addAction("Summary by Group (coming soon)");
     for(const auto& group : QStringList{
-            "Data","Cleaning","Transform","Describe","Tests","Regression",
+            "Data","Cleaning","Transform","Tests","Regression",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
             "Machine Learning","Graphs","Diagnostics","Interpret","Reports"}) {
         auto* groupMenu=analysisMenu->addMenu(group);
@@ -559,6 +565,23 @@ void MainWindow::sortDescending(){
     statusBar()->showMessage(QString("Sorted '%1' descending").arg(m_data.variables()[c].name));
 }
 void MainWindow::showDatasetInfo(){QString text=QString("Dataset\n\nRows: %1\nVariables: %2\nMissing cells: %3\n\nVariables:\n").arg(m_data.rowCount()).arg(m_data.columnCount());int missing=0;for(int c=0;c<m_data.columnCount();++c){missing+=m_data.missingCount(c);text+=QString("• %1 — %2 — missing %3\n").arg(m_data.variables()[c].name,variableTypeName(m_data.variables()[c].type)).arg(m_data.missingCount(c));}m_output->setPlainText(text);m_tabs->setCurrentWidget(m_output);}
+void MainWindow::runDescriptiveStatistics(){
+    QVector<int> columns;
+    for(int c=0;c<m_data.columnCount();++c) if(m_data.variables()[c].type==VariableType::Numeric) columns.push_back(c);
+    if(columns.isEmpty()){ QMessageBox::information(this,"Descriptive Statistics","No numeric variables are available. Add or import numeric variables first."); return; }
+    auto ranges=m_grid->selectedRanges();
+    if(!ranges.isEmpty()){
+        QSet<int> selectedCols;
+        for(const auto& rg:ranges) for(int c=rg.leftColumn();c<=rg.rightColumn();++c) selectedCols.insert(c);
+        QVector<int> chosen; for(int c:selectedCols) if(c>=0 && c<m_data.columnCount() && m_data.variables()[c].type==VariableType::Numeric) chosen.push_back(c);
+        if(!chosen.isEmpty()) columns=chosen;
+    }
+    const auto results=AnalysisEngine::descriptive(m_data,columns);
+    m_output->setPlainText(AnalysisEngine::formatDescriptiveTable(results));
+    m_tabs->setCurrentWidget(m_output);
+    statusBar()->showMessage(QString("Descriptive statistics completed for %1 numeric variable(s)").arg(results.size()),5000);
+}
+
 void MainWindow::undo(){m_undoStack->undo();m_state.setDirty(true);refreshDataView();}
 void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataView();}
 
@@ -566,7 +589,7 @@ void MainWindow::applyFilter(){const QString q=m_filterEdit->text().trimmed();QV
 void MainWindow::clearFilter(){m_filterEdit->clear();refreshDataView();}
 void MainWindow::replaceText(){bool ok=false;const auto find=QInputDialog::getText(this,"Find / Replace","Find:",QLineEdit::Normal,"",&ok);if(!ok||find.isEmpty())return;const auto repl=QInputDialog::getText(this,"Find / Replace","Replace with:",QLineEdit::Normal,"",&ok);if(!ok)return;int count=0;for(int r=0;r<m_data.rowCount();++r)for(int c=0;c<m_data.columnCount();++c){auto s=m_data.value(r,c).toString();if(s.contains(find,Qt::CaseInsensitive)){s.replace(find,repl,Qt::CaseInsensitive);QString err;if(m_data.validateValue(c,s,&err)) {m_data.setValue(r,c,s);++count;}}}if(count){m_state.setDirty(true);refreshDataView();}m_output->setPlainText(QString("Find / Replace complete. %1 cells changed.").arg(count));}
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.3.3 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.4.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){

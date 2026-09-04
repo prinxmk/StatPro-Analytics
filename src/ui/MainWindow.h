@@ -53,6 +53,7 @@ private slots:
     void sortAscending();
     void sortDescending();
     void showDatasetInfo();
+    void runDescriptiveStatistics();
     void undo();
     void redo();
 
