@@ -10,6 +10,9 @@
 #include <QSet>
 #include <QComboBox>
 #include <QDate>
+#include <QColorDialog>
+#include <QSettings>
+#include <QAbstractItemView>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
@@ -38,6 +41,7 @@
 #include <QHBoxLayout>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QGridLayout>
 #include <QUndoCommand>
 #include <algorithm>
 #include <functional>
@@ -53,7 +57,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.1"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.2"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -86,7 +90,7 @@ void MainWindow::buildInterface(){
 
     m_tabs=new QTabWidget;
     m_grid=new QTableWidget;
-    m_grid->setAlternatingRowColors(true);
+    m_grid->setAlternatingRowColors(false);
     m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_grid->setSelectionBehavior(QAbstractItemView::SelectItems);
     m_grid->setEditTriggers(QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed|QAbstractItemView::AnyKeyPressed);
@@ -117,9 +121,34 @@ void MainWindow::buildInterface(){
     m_tabs->addTab(m_grid,"Data Editor");
     connect(m_grid,&QTableWidget::cellChanged,this,&MainWindow::cellChanged);
 
-    m_output=new QPlainTextEdit;
-    m_output->setReadOnly(true);
-    m_tabs->addTab(m_output,"Results / Output");
+    auto* outputPage=new QWidget;
+    auto* outputLayout=new QVBoxLayout(outputPage);
+    outputLayout->setContentsMargins(10,10,10,10);
+    outputLayout->setSpacing(6);
+    m_outputTitle=new QLabel("Results / Output");
+    m_outputTitle->setObjectName("ResultsTitle");
+    m_outputTitle->setStyleSheet("font-size:16px;font-weight:600;");
+    m_outputSummary=new QLabel;
+    m_outputSummary->setObjectName("ResultsSummary");
+    m_outputSummary->setWordWrap(true);
+    m_output=new QTableWidget;
+    m_output->setAlternatingRowColors(false);
+    m_output->setSelectionBehavior(QAbstractItemView::SelectItems);
+    m_output->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_output->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_output->setWordWrap(false);
+    m_output->setCornerButtonEnabled(true);
+    m_output->verticalHeader()->setDefaultSectionSize(26);
+    m_output->horizontalHeader()->setSectionsMovable(false);
+    m_output->horizontalHeader()->setStretchLastSection(false);
+    m_outputNote=new QLabel;
+    m_outputNote->setObjectName("ResultsNote");
+    m_outputNote->setWordWrap(true);
+    outputLayout->addWidget(m_outputTitle);
+    outputLayout->addWidget(m_outputSummary);
+    outputLayout->addWidget(m_output,1);
+    outputLayout->addWidget(m_outputNote);
+    m_tabs->addTab(outputPage,"Results / Output");
     layout->addWidget(m_tabs,1);
     setCentralWidget(central);
 
@@ -199,7 +228,7 @@ void MainWindow::buildMenus(){
         auto* groupMenu=analysisMenu->addMenu(group);
         QAction* placeholder=groupMenu->addAction(QString("Open %1 module").arg(group));
         connect(placeholder,&QAction::triggered,this,[this,group]{
-            m_output->appendPlainText("\n[" + group + "] module selected. Statistical procedures will be added in the analysis-engine phases.");
+            showResultMessage(group, "The " + group + " module is available in the analysis menu. Statistical procedures will be added in the analysis-engine phases.");
             m_tabs->setCurrentWidget(m_output);
             statusBar()->showMessage(group + " module selected",3000);
         });
@@ -207,6 +236,7 @@ void MainWindow::buildMenus(){
 
     auto* viewMenu=menuBar()->addMenu("&View");
     addAction(viewMenu,"Light / Dark Theme",[this]{toggleTheme();});
+    addAction(viewMenu,"Results Table Formatting…",[this]{formatResultsTables();});
     viewMenu->addSeparator();
 
     // Dock toggle actions are added after the docks exist in buildInterface().
@@ -231,7 +261,7 @@ void MainWindow::buildVariablesPanel(){
     layout->setSpacing(5);
 
     m_variables=new QListWidget;
-    m_variables->setAlternatingRowColors(true);
+    m_variables->setAlternatingRowColors(false);
     m_variables->setSelectionMode(QAbstractItemView::SingleSelection);
     layout->addWidget(m_variables,1);
 
@@ -259,7 +289,7 @@ void MainWindow::buildPropertiesPanel(){
     m_propertiesDock->setObjectName("PropertiesDock");
     m_properties=new QTreeWidget;
     m_properties->setHeaderLabels({"Property","Value"});
-    m_properties->setAlternatingRowColors(true);
+    m_properties->setAlternatingRowColors(false);
     m_propertiesDock->setWidget(m_properties);
     addDockWidget(Qt::RightDockWidgetArea,m_propertiesDock);
 }
@@ -336,11 +366,11 @@ void MainWindow::buildStatusBar(){
 }
 
 
-void MainWindow::newProject(){if(!confirmSaveIfDirty())return;m_data.clear();m_state.setProjectPath("");m_state.setProjectName("Untitled Project");m_state.setDirty(false);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();m_output->setPlainText("New project created.");}
-void MainWindow::openProject(){if(!confirmSaveIfDirty())return;const auto path=QFileDialog::getOpenFileName(this,"Open StatPro Project",{},"StatPro Project (*.stpro)");if(path.isEmpty())return;QString name,error;if(!ProjectManager::openProject(path,name,m_data,&error)){QMessageBox::critical(this,"Open Project",error);return;}m_state.setProjectPath(path);m_state.setProjectName(name);m_state.setDirty(false);m_state.addRecentProject(path);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();m_output->setPlainText("Project opened: "+path);}
+void MainWindow::newProject(){if(!confirmSaveIfDirty())return;m_data.clear();m_state.setProjectPath("");m_state.setProjectName("Untitled Project");m_state.setDirty(false);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();showResultMessage("Project", "New project created.");}
+void MainWindow::openProject(){if(!confirmSaveIfDirty())return;const auto path=QFileDialog::getOpenFileName(this,"Open StatPro Project",{},"StatPro Project (*.stpro)");if(path.isEmpty())return;QString name,error;if(!ProjectManager::openProject(path,name,m_data,&error)){QMessageBox::critical(this,"Open Project",error);return;}m_state.setProjectPath(path);m_state.setProjectName(name);m_state.setDirty(false);m_state.addRecentProject(path);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();showResultMessage("Project", "Project opened: "+path);}
 void MainWindow::saveProject(){if(m_state.projectPath().isEmpty()){saveProjectAs();return;}QString error;if(!ProjectManager::saveProject(m_state.projectPath(),m_state.projectName(),m_data,&error))QMessageBox::critical(this,"Save Project",error);else{m_state.setDirty(false);m_state.addRecentProject(m_state.projectPath());statusBar()->showMessage("Project saved");}}
 void MainWindow::saveProjectAs(){auto path=QFileDialog::getSaveFileName(this,"Save StatPro Project",{},"StatPro Project (*.stpro)");if(path.isEmpty())return;if(!path.endsWith(".stpro",Qt::CaseInsensitive))path += ".stpro";m_state.setProjectPath(path);m_state.setProjectName(QFileInfo(path).completeBaseName());updateTitle();saveProject();}
-void MainWindow::importCsv(){const auto path=QFileDialog::getOpenFileName(this,"Import Data",{},"Supported data (*.csv *.tsv *.txt);;CSV files (*.csv);;Tab-separated files (*.tsv);;Text files (*.txt)");if(path.isEmpty())return;QString error;if(!CsvImporter::importFile(path,m_data,&error)){QMessageBox::critical(this,"Import Data",error);return;}m_state.setProjectPath("");m_state.setProjectName(QFileInfo(path).completeBaseName());m_state.setDirty(true);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();m_output->setPlainText("Data imported successfully.\n"+path);m_tabs->setCurrentWidget(m_grid);}
+void MainWindow::importCsv(){const auto path=QFileDialog::getOpenFileName(this,"Import Data",{},"Supported data (*.csv *.tsv *.txt);;CSV files (*.csv);;Tab-separated files (*.tsv);;Text files (*.txt)");if(path.isEmpty())return;QString error;if(!CsvImporter::importFile(path,m_data,&error)){QMessageBox::critical(this,"Import Data",error);return;}m_state.setProjectPath("");m_state.setProjectName(QFileInfo(path).completeBaseName());m_state.setDirty(true);m_undoStack->clear();m_filterEdit->clear();refreshDataView();refreshVariables();showResultMessage("Import", "Data imported successfully.\n"+path);m_tabs->setCurrentWidget(m_grid);}
 void MainWindow::exportCsv(){QString selectedFilter;auto path=QFileDialog::getSaveFileName(this,"Export Data",{},"CSV files (*.csv);;Tab-separated files (*.tsv);;Text files (*.txt)",&selectedFilter);if(path.isEmpty())return;QChar delimiter=',';if(selectedFilter.startsWith("Tab-separated")||QFileInfo(path).suffix().compare("tsv",Qt::CaseInsensitive)==0)delimiter='\t';QString error;if(!m_data.saveDelimited(path,delimiter,&error))QMessageBox::critical(this,"Export Data",error);else statusBar()->showMessage("Data exported");}
 void MainWindow::toggleTheme(){m_state.setDarkMode(!m_state.darkMode());applyTheme();}
 
@@ -563,7 +593,17 @@ void MainWindow::sortDescending(){
     m_state.setDirty(true);refreshDataView();
     statusBar()->showMessage(QString("Sorted '%1' descending").arg(m_data.variables()[c].name));
 }
-void MainWindow::showDatasetInfo(){QString text=QString("Dataset\n\nRows: %1\nVariables: %2\nMissing cells: %3\n\nVariables:\n").arg(m_data.rowCount()).arg(m_data.columnCount());int missing=0;for(int c=0;c<m_data.columnCount();++c){missing+=m_data.missingCount(c);text+=QString("• %1 — %2 — missing %3\n").arg(m_data.variables()[c].name,variableTypeName(m_data.variables()[c].type)).arg(m_data.missingCount(c));}m_output->setPlainText(text);m_tabs->setCurrentWidget(m_output);}
+void MainWindow::showDatasetInfo(){
+    QVector<QStringList> rows;
+    int missingTotal=0;
+    for(int c=0;c<m_data.columnCount();++c){
+        const int missing=m_data.missingCount(c); missingTotal+=missing;
+        rows.push_back({m_data.variables()[c].name, variableTypeName(m_data.variables()[c].type), QString::number(m_data.rowCount()), QString::number(missing)});
+    }
+    showResultTable("Dataset Information", {"Variable","Type","Observations","Missing"}, rows, {2,3},
+                    QString("Dataset contains %1 observations, %2 variables and %3 missing cells.").arg(m_data.rowCount()).arg(m_data.columnCount()).arg(missingTotal));
+    m_tabs->setCurrentWidget(m_output->parentWidget());
+}
 void MainWindow::runDescriptiveStatistics(){
     QVector<int> columns;
     for(int c=0;c<m_data.columnCount();++c) if(m_data.variables()[c].type==VariableType::Numeric) columns.push_back(c);
@@ -576,8 +616,16 @@ void MainWindow::runDescriptiveStatistics(){
         if(!chosen.isEmpty()) columns=chosen;
     }
     const auto results=AnalysisEngine::descriptive(m_data,columns);
-    m_output->setPlainText(AnalysisEngine::formatDescriptiveTable(results));
-    m_tabs->setCurrentWidget(m_output);
+    QVector<QStringList> rows;
+    for(const auto& r:results){
+        rows.push_back({r.variable, r.label, QString::number(r.observations), QString::number(r.valid), QString::number(r.blank), QString::number(r.declaredMissing), QString::number(r.nonNumeric),
+                        AnalysisEngine::number(r.mean), AnalysisEngine::number(r.stdDev), AnalysisEngine::number(r.variance), AnalysisEngine::number(r.minimum), AnalysisEngine::number(r.q1), AnalysisEngine::number(r.median), AnalysisEngine::number(r.q3), AnalysisEngine::number(r.maximum), AnalysisEngine::number(r.skewness), AnalysisEngine::number(r.kurtosis)});
+    }
+    showResultTable("Descriptive Statistics",
+                    {"Variable","Label","Observations","Valid","Blank","Declared missing","Non-numeric","Mean","Std. Dev.","Variance","Min","Q1","Median","Q3","Max","Skewness","Kurtosis"},
+                    rows, {2,3,4,5,6,7,8,9,10,11,12,13,14,15,16},
+                    "N is the number of observations in the selected data. Valid values are used for the statistics; blank, declared-missing and non-numeric values remain accounted for.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());
     statusBar()->showMessage(QString("Descriptive statistics completed for %1 numeric variable(s)").arg(results.size()),5000);
 }
 
@@ -588,8 +636,14 @@ void MainWindow::runFrequencies(){
     bool ok=false; QString choice=QInputDialog::getItem(this,"Frequencies","Variable:",names,0,false,&ok); if(!ok)return;
     int column=names.indexOf(choice); if(column<0)return;
     const auto results=AnalysisEngine::frequencies(m_data,column);
-    if(results.isEmpty()){ QMessageBox::information(this,"Frequencies","No valid observations are available for this variable."); return; }
-    m_output->setPlainText(AnalysisEngine::formatFrequencyTable(m_data,column,results)); m_tabs->setCurrentWidget(m_output);
+    const auto summary=AnalysisEngine::frequencySummary(m_data,column);
+    QVector<QStringList> rows;
+    for(const auto& r:results) rows.push_back({r.value,QString::number(r.count),QString::number(r.percent,'f',2)+"%",r.special?"—":QString::number(r.validPercent,'f',2)+"%",r.special?"—":QString::number(r.cumulativeValidPercent,'f',2)+"%"});
+    showResultTable("Frequencies — " + choice, {"Value","Frequency","Percent of observations","Valid percent","Cumulative valid %"}, rows, {1,2,3,4},
+                    QString("Observations: %1  |  Valid: %2  |  Blank: %3  |  Declared missing: %4  |  Non-numeric / invalid: %5")
+                    .arg(summary.observations).arg(summary.valid).arg(summary.blank).arg(summary.declaredMissing).arg(summary.nonNumeric),
+                    "Special values are displayed rather than silently excluded. Valid percent and cumulative valid percent are calculated from valid observations.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());
     statusBar()->showMessage(QString("Frequency table completed for '%1'").arg(choice),5000);
 }
 
@@ -601,8 +655,14 @@ void MainWindow::runSummaryByGroup(){
     QString groupName=QInputDialog::getItem(this,"Summary by Group","Group variable:",all,0,false,&ok); if(!ok)return;
     int valueCol=all.indexOf(valueName), groupCol=all.indexOf(groupName); if(valueCol<0||groupCol<0||valueCol==groupCol){QMessageBox::information(this,"Summary by Group","The grouping and numeric variables must be different.");return;}
     const auto results=AnalysisEngine::summaryByGroup(m_data,groupCol,valueCol);
-    if(results.isEmpty()){ QMessageBox::information(this,"Summary by Group","No usable groups or observations were found."); return; }
-    m_output->setPlainText(AnalysisEngine::formatGroupSummaryTable(m_data,groupCol,valueCol,results)); m_tabs->setCurrentWidget(m_output);
+    QVector<QStringList> rows;
+    for(const auto& r:results) rows.push_back({r.group,QString::number(r.observations),QString::number(r.valid),QString::number(r.blank),QString::number(r.declaredMissing),QString::number(r.nonNumeric),
+                                                AnalysisEngine::number(r.mean),AnalysisEngine::number(r.stdDev),AnalysisEngine::number(r.minimum),AnalysisEngine::number(r.median),AnalysisEngine::number(r.maximum)});
+    showResultTable("Summary by Group — " + valueName + " by " + groupName,
+                    {"Group","Observations","Valid","Blank","Declared missing","Non-numeric","Mean","Std. Dev.","Min","Median","Max"},
+                    rows,{1,2,3,4,5,6,7,8,9,10},
+                    "Outcome observations remain accounted for within each group. Group values that are blank, declared-missing or invalid are displayed explicitly.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());
     statusBar()->showMessage(QString("Grouped summary completed: %1 by %2").arg(valueName,groupName),5000);
 }
 
@@ -611,9 +671,109 @@ void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataVi
 
 void MainWindow::applyFilter(){const QString q=m_filterEdit->text().trimmed();QVector<int> rows=m_data.filteredRows(q);refreshDataView(rows);statusBar()->showMessage(QString("%1 of %2 rows shown").arg(rows.size()).arg(m_data.rowCount()));}
 void MainWindow::clearFilter(){m_filterEdit->clear();refreshDataView();}
-void MainWindow::replaceText(){bool ok=false;const auto find=QInputDialog::getText(this,"Find / Replace","Find:",QLineEdit::Normal,"",&ok);if(!ok||find.isEmpty())return;const auto repl=QInputDialog::getText(this,"Find / Replace","Replace with:",QLineEdit::Normal,"",&ok);if(!ok)return;int count=0;for(int r=0;r<m_data.rowCount();++r)for(int c=0;c<m_data.columnCount();++c){auto s=m_data.value(r,c).toString();if(s.contains(find,Qt::CaseInsensitive)){s.replace(find,repl,Qt::CaseInsensitive);QString err;if(m_data.validateValue(c,s,&err)) {m_data.setValue(r,c,s);++count;}}}if(count){m_state.setDirty(true);refreshDataView();}m_output->setPlainText(QString("Find / Replace complete. %1 cells changed.").arg(count));}
+void MainWindow::replaceText(){bool ok=false;const auto find=QInputDialog::getText(this,"Find / Replace","Find:",QLineEdit::Normal,"",&ok);if(!ok||find.isEmpty())return;const auto repl=QInputDialog::getText(this,"Find / Replace","Replace with:",QLineEdit::Normal,"",&ok);if(!ok)return;int count=0;for(int r=0;r<m_data.rowCount();++r)for(int c=0;c<m_data.columnCount();++c){auto s=m_data.value(r,c).toString();if(s.contains(find,Qt::CaseInsensitive)){s.replace(find,repl,Qt::CaseInsensitive);QString err;if(m_data.validateValue(c,s,&err)) {m_data.setValue(r,c,s);++count;}}}if(count){m_state.setDirty(true);refreshDataView();}showResultMessage("Find / Replace", QString("Find / Replace complete. %1 cells changed.").arg(count));}
+void MainWindow::showResultMessage(const QString& title, const QString& message){
+    showResultTable(title, {"Output"}, {{message}}, {}, QString());
+    m_tabs->setCurrentWidget(m_output->parentWidget());
+}
+
+void MainWindow::showResultTable(const QString& title, const QStringList& headers, const QVector<QStringList>& rows,
+                                 const QSet<int>& numericColumns, const QString& note, const QString& summary){
+    m_outputTitle->setText(title);
+    m_outputSummary->setText(summary);
+    m_outputSummary->setVisible(!summary.isEmpty());
+    m_outputNote->setText(note);
+    m_outputNote->setVisible(!note.isEmpty());
+    m_output->clear();
+    m_output->setColumnCount(headers.size());
+    m_output->setRowCount(rows.size());
+    m_output->setHorizontalHeaderLabels(headers);
+    for(int r=0;r<rows.size();++r){
+        for(int c=0;c<headers.size();++c){
+            QString text=c<rows[r].size()?rows[r][c]:QString();
+            if(numericColumns.contains(c)) {
+                const int decimals=QSettings("StatPro Analytics","StatPro Analytics").value("results/decimals",4).toInt();
+                QString raw=text.endsWith('%') ? text.left(text.size()-1) : text;
+                bool ok=false; const double numeric=raw.remove(',').toDouble(&ok);
+                if(ok) text=QString::number(numeric,'f',decimals)+(text.endsWith('%')?"%":"");
+            }
+            auto* item=new QTableWidgetItem(text);
+            const bool numeric=numericColumns.contains(c);
+            item->setTextAlignment(numeric?Qt::AlignRight|Qt::AlignVCenter:Qt::AlignLeft|Qt::AlignVCenter);
+            if(numeric) {
+                QString raw=text.endsWith('%') ? text.left(text.size()-1) : text;
+                bool ok=false; const double numericValue=raw.remove(',').toDouble(&ok);
+                if(ok) { item->setData(Qt::UserRole,numericValue); item->setData(Qt::UserRole+1,text.endsWith('%')); }
+            }
+            m_output->setItem(r,c,item);
+        }
+    }
+    m_output->resizeColumnsToContents();
+    for(int c=0;c<m_output->columnCount();++c){
+        int width=m_output->columnWidth(c);
+        m_output->setColumnWidth(c,qBound(90,width+18,360));
+    }
+    m_output->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
+    applyResultsFormatting();
+}
+
+void MainWindow::formatResultsTables(){
+    QSettings settings("StatPro Analytics","StatPro Analytics");
+    QDialog d(this); d.setWindowTitle("Results Table Formatting"); d.resize(460,360);
+    auto* form=new QFormLayout(&d);
+    auto* shade=new QComboBox; shade->addItems({"None","Alternating rows"}); shade->setCurrentText(settings.value("results/rowShading","None").toString());
+    auto* grid=new QComboBox; grid->addItems({"Visible","Hidden"}); grid->setCurrentText(settings.value("results/grid","Visible").toString());
+    auto* decimals=new QSpinBox; decimals->setRange(0,8); decimals->setValue(settings.value("results/decimals",4).toInt());
+    auto* fontSize=new QSpinBox; fontSize->setRange(8,20); fontSize->setValue(settings.value("results/fontSize",10).toInt());
+    auto* headerBg=new QPushButton("Choose…"); auto* rowBg=new QPushButton("Choose…"); auto* altBg=new QPushButton("Choose…");
+    QColor h=settings.value("results/headerColor", "#eef1f4").value<QColor>();
+    QColor r=settings.value("results/rowColor", "#ffffff").value<QColor>();
+    QColor a=settings.value("results/alternateColor", "#f7f9fb").value<QColor>();
+    if(!h.isValid())h=QColor("#eef1f4"); if(!r.isValid())r=QColor("#ffffff"); if(!a.isValid())a=QColor("#f7f9fb");
+    auto choose=[&](QPushButton* b,QColor& color){b->setText(color.name()); connect(b,&QPushButton::clicked,&d,[&color,b,&d]{const QColor picked=QColorDialog::getColor(color,&d,"Choose table color");if(picked.isValid()){color=picked;b->setText(color.name());}});};
+    choose(headerBg,h); choose(rowBg,r); choose(altBg,a);
+    form->addRow("Row shading",shade); form->addRow("Grid lines",grid); form->addRow("Decimal places",decimals); form->addRow("Font size",fontSize);
+    form->addRow("Header background",headerBg); form->addRow("Row background",rowBg); form->addRow("Alternate-row background",altBg);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form->addRow(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&d,&QDialog::accept); connect(buttons,&QDialogButtonBox::rejected,&d,&QDialog::reject);
+    if(d.exec()!=QDialog::Accepted)return;
+    settings.setValue("results/rowShading",shade->currentText()); settings.setValue("results/grid",grid->currentText()); settings.setValue("results/decimals",decimals->value()); settings.setValue("results/fontSize",fontSize->value());
+    settings.setValue("results/headerColor",h); settings.setValue("results/rowColor",r); settings.setValue("results/alternateColor",a);
+    applyResultsFormatting();
+}
+
+void MainWindow::applyResultsFormatting(){
+    if(!m_output)return;
+    QSettings settings("StatPro Analytics","StatPro Analytics");
+    const QString shade=settings.value("results/rowShading","None").toString();
+    const QString grid=settings.value("results/grid","Visible").toString();
+    const int fontSize=settings.value("results/fontSize",10).toInt();
+    const QPalette pal=m_output->palette();
+    const QColor defaultBase=pal.color(QPalette::Base);
+    const QColor defaultAlt=pal.color(QPalette::AlternateBase);
+    const QColor defaultHeader=pal.color(QPalette::Mid);
+    const QColor h=settings.contains("results/headerColor")?settings.value("results/headerColor").value<QColor>():defaultHeader;
+    const QColor r=settings.contains("results/rowColor")?settings.value("results/rowColor").value<QColor>():defaultBase;
+    const QColor a=settings.contains("results/alternateColor")?settings.value("results/alternateColor").value<QColor>():defaultAlt;
+    const QColor gridColor=grid=="Hidden"?r:pal.color(QPalette::Mid);
+    const int decimals=settings.value("results/decimals",4).toInt();
+    for(int row=0;row<m_output->rowCount();++row){
+        for(int col=0;col<m_output->columnCount();++col){
+            auto* item=m_output->item(row,col); if(!item || !item->data(Qt::UserRole).isValid()) continue;
+            const double value=item->data(Qt::UserRole).toDouble();
+            const bool percent=item->data(Qt::UserRole+1).toBool();
+            const bool whole=std::fabs(value-std::round(value))<1e-9 && !percent;
+            item->setText(whole?QString::number(value,'f',0):QString::number(value,'f',decimals)+(percent?"%":""));
+        }
+    }
+    QString style=QString("QTableWidget{font-size:%1pt;background:%2;color:palette(text);gridline-color:%3;} QTableWidget::item{background:%2;padding:4px 6px;} QTableWidget::item:selected{background:palette(highlight);color:palette(highlighted-text);} QHeaderView::section{background:%4;color:palette(text);font-weight:600;padding:6px;border:0;border-bottom:1px solid %3;}")
+        .arg(fontSize).arg(r.name(QColor::HexArgb)).arg(gridColor.name(QColor::HexArgb)).arg(h.name(QColor::HexArgb));
+    if(shade=="Alternating rows") style += QString(" QTableWidget::item:alternate{background:%1;}").arg(a.name(QColor::HexArgb));
+    m_output->setStyleSheet(style);
+}
+
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.4.1 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.4.2 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){
@@ -634,5 +794,6 @@ void MainWindow::closeEvent(QCloseEvent* e){if(confirmSaveIfDirty())e->accept();
 void MainWindow::applyTheme(){
  if(m_state.darkMode())setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#20242a;color:#e8eaed}QToolBar{background:#292e36;border:1px solid #3b414b;padding:5px;spacing:4px}QToolButton{color:#e8eaed;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#3a414c}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#252a31;color:#e8eaed;border:1px solid #414752}QHeaderView::section{background:#303640;color:#e8eaed;padding:5px}QPushButton{color:#e8eaed;background:#303640;border:1px solid #4b5360;padding:6px 12px;border-radius:4px}QMenuBar,QMenu{background:#292e36;color:#e8eaed}QMenuBar::item:selected,QMenu::item:selected{background:#3a414c}QStatusBar{background:#292e36;color:#e8eaed;border-top:1px solid #3b414b}QDockWidget::title{background:#292e36;color:#e8eaed;padding:6px}QGroupBox{border:1px solid #414752;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#3a414c})");
  else setStyleSheet(R"(QMainWindow,QDockWidget,QTabWidget::pane{background:#f4f6f8;color:#20242a}QToolBar{background:#ffffff;border:1px solid #d8dde3;padding:5px;spacing:4px}QToolButton{color:#20242a;padding:7px 9px;border-radius:5px}QToolButton:hover{background:#e9eef5}QTableWidget,QListWidget,QTreeWidget,QPlainTextEdit,QLineEdit,QComboBox{background:#ffffff;color:#20242a;border:1px solid #d8dde3}QHeaderView::section{background:#eef1f4;color:#20242a;padding:5px}QPushButton{color:#20242a;background:#ffffff;border:1px solid #b8c0c9;padding:6px 12px;border-radius:4px}QMenuBar,QMenu{background:#ffffff;color:#20242a}QMenuBar::item:selected,QMenu::item:selected{background:#e9eef5}QStatusBar{background:#ffffff;color:#20242a;border-top:1px solid #d8dde3}QDockWidget::title{background:#eef1f4;color:#20242a;padding:6px}QGroupBox{border:1px solid #d8dde3;margin-top:8px;padding-top:8px;font-weight:600}QPushButton:hover{background:#e9eef5})");
+ applyResultsFormatting();
 }
 }

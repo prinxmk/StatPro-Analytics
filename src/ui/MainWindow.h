@@ -11,6 +11,7 @@ class QTreeWidget;
 class QLabel;
 class QTabWidget;
 class QPlainTextEdit;
+class QTableWidgetItem;
 class QLineEdit;
 class QPushButton;
 class QComboBox;
@@ -56,6 +57,7 @@ private slots:
     void runDescriptiveStatistics();
     void runFrequencies();
     void runSummaryByGroup();
+    void formatResultsTables();
     void undo();
     void redo();
 
@@ -74,6 +76,10 @@ private:
     void updateTitle();
     void applyTheme();
     void updateStatus();
+    void showResultTable(const QString& title, const QStringList& headers, const QVector<QStringList>& rows, const QSet<int>& numericColumns = {}, const QString& note = QString(), const QString& summary = QString());
+    void showResultMessage(const QString& title, const QString& message);
+    void applyResultsFormatting();
+    void saveResultsFormatting();
 
     int selectedVariableColumn() const;
     void selectVariableColumn(int column);
@@ -91,7 +97,10 @@ private:
     QTableWidget* m_grid{};
     QListWidget* m_variables{};
     QTreeWidget* m_properties{};
-    QPlainTextEdit* m_output{};
+    QTableWidget* m_output{};
+    QLabel* m_outputTitle{};
+    QLabel* m_outputSummary{};
+    QLabel* m_outputNote{};
     QLineEdit* m_filterEdit{};
     QUndoStack* m_undoStack{};
 
