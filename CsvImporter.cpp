@@ -3,13 +3,14 @@
 #include <QTextStream>
 #include <QDate>
 #include <QSet>
+#include <QFileInfo>
 
 namespace StatPro {
-static QStringList splitCsvLine(const QString& line){
+static QStringList splitDelimitedLine(const QString& line, QChar delimiter){
     QStringList out; QString cur; bool quoted=false;
     for(int i=0;i<line.size();++i){QChar c=line[i];
         if(c=='"'){if(quoted&&i+1<line.size()&&line[i+1]=='"'){cur+='"';++i;}else quoted=!quoted;}
-        else if(c==','&&!quoted){out<<cur;cur.clear();} else cur+=c;
+        else if(c==delimiter&&!quoted){out<<cur;cur.clear();} else cur+=c;
     } out<<cur; return out;
 }
 static QString uniqueName(const QString& raw,int index,const QSet<QString>& used){
@@ -24,7 +25,16 @@ static VariableType inferType(const QStringList& values){
 bool CsvImporter::importFile(const QString& path,DataSet& target,QString* error){
     QFile f(path); if(!f.open(QIODevice::ReadOnly|QIODevice::Text)){if(error)*error=f.errorString();return false;}
     QTextStream in(&f); if(in.atEnd()){if(error)*error="The CSV file is empty.";return false;}
-    const auto names=splitCsvLine(in.readLine()); QVector<QStringList> records; while(!in.atEnd()){auto cells=splitCsvLine(in.readLine());cells.resize(names.size());records.push_back(cells);}
+    const QString firstLine=in.readLine();
+    const QString suffix=QFileInfo(path).suffix().toLower();
+    QChar delimiter = (suffix=="tsv") ? '\t' : ',';
+    if (suffix=="txt") {
+        const int tabs=firstLine.count('\t'), commas=firstLine.count(',');
+        delimiter = tabs>commas ? '\t' : ',';
+    }
+    const auto names=splitDelimitedLine(firstLine, delimiter);
+    QVector<QStringList> records;
+    while(!in.atEnd()){auto cells=splitDelimitedLine(in.readLine(), delimiter);cells.resize(names.size());records.push_back(cells);}
     QVector<Variable> vars; QSet<QString> used;
     for(int i=0;i<names.size();++i){Variable v;v.name=uniqueName(names.value(i),i,used);used.insert(v.name);QStringList vals;for(const auto& row:records)vals<<row.value(i);v.type=inferType(vals);vars.push_back(v);}
     DataSet d;if(!d.setColumns(vars)){if(error)*error="The CSV contains invalid or duplicate column names.";return false;}

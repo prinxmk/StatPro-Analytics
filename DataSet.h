@@ -40,6 +40,7 @@ public:
     bool isMissing(int row, int column) const;
     int missingCount(int column) const;
     bool saveCsv(const QString&, QString* error = nullptr) const;
+    bool saveDelimited(const QString&, QChar delimiter, QString* error = nullptr) const;
     QVector<int> filteredRows(const QString& query) const;
 
 private:

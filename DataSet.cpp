@@ -29,6 +29,10 @@ bool DataSet::validateValue(int column, const QVariant& value, QString* error) c
     if (column < 0 || column >= columnCount()) return false;
     const QString text = value.toString().trimmed();
     if (text.isEmpty()) return true;
+    // User-declared missing codes are valid values regardless of the storage type.
+    for (const auto& missing : m_variables[column].missingValues) {
+        if (text == missing.trimmed()) return true;
+    }
     const auto type = m_variables[column].type;
     bool ok = true;
     switch (type) {
@@ -75,6 +79,11 @@ bool DataSet::setVariable(int c, const Variable& v, QString* error) {
     for (int r = 0; r < rowCount(); ++r) {
         const QString text = m_rows[r][c].toString().trimmed();
         if (text.isEmpty()) continue;
+        bool declaredMissing = false;
+        for (const auto& mv : v.missingValues) {
+            if (text == mv.trimmed()) { declaredMissing = true; break; }
+        }
+        if (declaredMissing) continue;
         QString valueError;
         // Validate against the NEW variable definition, not the old one.
         switch (v.type) {
@@ -159,13 +168,28 @@ bool DataSet::sortByColumn(int column, bool ascending) {
 
 bool DataSet::isMissing(int r, int c) const {
     if (r < 0 || r >= rowCount() || c < 0 || c >= columnCount()) return true;
-    const QString s=value(r,c).toString();
-    return s.trimmed().isEmpty() || m_variables[c].missingValues.contains(s);
+    const QString s=value(r,c).toString().trimmed();
+    if (s.isEmpty()) return true;
+    for (const auto& mv : m_variables[c].missingValues) if (s == mv.trimmed()) return true;
+    return false;
 }
 int DataSet::missingCount(int c) const { int n=0; for(int r=0;r<rowCount();++r) if(isMissing(r,c)) ++n; return n; }
 
-static QString csvEscape(const QString& s) { QString out=s; out.replace("\"","\"\""); if(out.contains(',')||out.contains('"')||out.contains('\n')) return '"'+out+'"'; return out; }
-bool DataSet::saveCsv(const QString& path, QString* error) const { QFile f(path); if(!f.open(QIODevice::WriteOnly|QIODevice::Text)){if(error)*error=f.errorString();return false;} QTextStream out(&f); out<<columnNames().join(',')<<'\n'; for(const auto& row:m_rows){QStringList cells;for(const auto& cell:row)cells<<csvEscape(cell.toString());out<<cells.join(',')<<'\n';} return true; }
+static QString delimitedEscape(const QString& s, QChar delimiter) {
+    QString out=s; out.replace("\"","\"\"");
+    if(out.contains(delimiter)||out.contains('"')||out.contains('\n')||out.contains('\r')) return '"'+out+'"';
+    return out;
+}
+bool DataSet::saveDelimited(const QString& path, QChar delimiter, QString* error) const {
+    QFile f(path);
+    if(!f.open(QIODevice::WriteOnly|QIODevice::Text)){if(error)*error=f.errorString();return false;}
+    QTextStream out(&f);
+    QStringList headers; for (const auto& h : columnNames()) headers << delimitedEscape(h, delimiter);
+    out<<headers.join(delimiter)<<'\n';
+    for(const auto& row:m_rows){QStringList cells;for(const auto& cell:row)cells<<delimitedEscape(cell.toString(), delimiter);out<<cells.join(delimiter)<<'\n';}
+    return true;
+}
+bool DataSet::saveCsv(const QString& path, QString* error) const { return saveDelimited(path, ',', error); }
 QVector<int> DataSet::filteredRows(const QString& query) const {
     QVector<int> result; const QString q=query.trimmed();
     if(q.isEmpty()){for(int r=0;r<rowCount();++r)result<<r;return result;}
