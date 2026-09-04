@@ -54,6 +54,8 @@ private slots:
     void sortDescending();
     void showDatasetInfo();
     void runDescriptiveStatistics();
+    void runFrequencies();
+    void runSummaryByGroup();
     void undo();
     void redo();
 

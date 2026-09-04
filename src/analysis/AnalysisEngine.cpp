@@ -1,6 +1,7 @@
 #include "AnalysisEngine.h"
 #include <algorithm>
 #include <QTextStream>
+#include <QMap>
 
 namespace StatPro {
 
@@ -46,6 +47,86 @@ QVector<DescriptiveRow> AnalysisEngine::descriptive(const DataSet& data, const Q
         result.push_back(s);
     }
     return result;
+}
+
+
+QVector<FrequencyRow> AnalysisEngine::frequencies(const DataSet& data, int column, const QVector<int>& rows) {
+    QVector<FrequencyRow> result;
+    if(column<0 || column>=data.columnCount()) return result;
+    QVector<int> useRows=rows;
+    if(useRows.isEmpty()){ useRows.reserve(data.rowCount()); for(int r=0;r<data.rowCount();++r) useRows.push_back(r); }
+    QMap<QString,int> counts;
+    int valid=0;
+    for(int r:useRows){
+        if(r<0 || r>=data.rowCount() || data.isMissing(r,column)) continue;
+        QString value=data.value(r,column).toString().trimmed();
+        if(value.isEmpty()) continue;
+        ++counts[value]; ++valid;
+    }
+    if(valid==0) return result;
+    int cumulative=0;
+    for(auto it=counts.cbegin();it!=counts.cend();++it){
+        FrequencyRow f; f.value=it.key(); f.count=it.value(); cumulative+=f.count;
+        f.percent=100.0*f.count/valid; f.cumulativePercent=100.0*cumulative/valid; result.push_back(f);
+    }
+    return result;
+}
+
+QString AnalysisEngine::formatFrequencyTable(const DataSet& data, int column, const QVector<FrequencyRow>& rows) {
+    QString out; QTextStream ts(&out);
+    const QString name=(column>=0 && column<data.columnCount())?data.variables()[column].name:"Variable";
+    int total=0; for(const auto& r:rows) total+=r.count;
+    ts << "Frequencies: " << name << "\n" << QString(68,'=') << "\n";
+    ts << QString("%1%2%3%4\n").arg("Value",30).arg("Frequency",12).arg("Percent",12).arg("Cum. Percent",14);
+    ts << QString(68,'-') << "\n";
+    for(const auto& r:rows)
+        ts << r.value.left(30).leftJustified(30) << QString::number(r.count).rightJustified(12)
+           << QString::number(r.percent,'f',2).rightJustified(12) << QString::number(r.cumulativePercent,'f',2).rightJustified(14) << "\n";
+    ts << QString(68,'-') << "\n" << "Valid total" << QString::number(total).rightJustified(54) << "\n";
+    ts << "Note: blank and declared-missing values are excluded from percentages.\n";
+    return out;
+}
+
+QVector<GroupSummaryRow> AnalysisEngine::summaryByGroup(const DataSet& data, int groupColumn, int valueColumn, const QVector<int>& rows) {
+    QVector<GroupSummaryRow> result;
+    if(groupColumn<0 || groupColumn>=data.columnCount() || valueColumn<0 || valueColumn>=data.columnCount() ||
+       data.variables()[valueColumn].type!=VariableType::Numeric) return result;
+    QVector<int> useRows=rows;
+    if(useRows.isEmpty()){ useRows.reserve(data.rowCount()); for(int r=0;r<data.rowCount();++r) useRows.push_back(r); }
+    QMap<QString,QVector<double>> groups;
+    QMap<QString,int> missing;
+    for(int r:useRows){
+        if(r<0 || r>=data.rowCount()) continue;
+        QString group=data.isMissing(r,groupColumn)?"(Missing group)":data.value(r,groupColumn).toString().trimmed();
+        if(group.isEmpty()) group="(Blank)";
+        double value;
+        if(numericValue(data,r,valueColumn,value)) groups[group].push_back(value); else ++missing[group];
+    }
+    for(auto it=groups.cbegin();it!=groups.cend();++it){
+        const auto& x=it.value(); GroupSummaryRow g; g.group=it.key(); g.n=x.size(); g.missing=missing.value(it.key());
+        if(x.isEmpty()){ result.push_back(g); continue; }
+        double sum=0; for(double v:x) sum+=v; g.mean=sum/x.size();
+        QVector<double> sorted=x; std::sort(sorted.begin(),sorted.end()); g.minimum=sorted.first(); g.maximum=sorted.last(); g.median=percentile(sorted,.5);
+        if(x.size()>1){ double ss=0; for(double v:x){double d=v-g.mean;ss+=d*d;} g.stdDev=std::sqrt(ss/(x.size()-1)); }
+        result.push_back(g);
+    }
+    return result;
+}
+
+QString AnalysisEngine::formatGroupSummaryTable(const DataSet& data, int groupColumn, int valueColumn, const QVector<GroupSummaryRow>& rows) {
+    QString out; QTextStream ts(&out);
+    QString group=(groupColumn>=0&&groupColumn<data.columnCount())?data.variables()[groupColumn].name:"Group";
+    QString value=(valueColumn>=0&&valueColumn<data.columnCount())?data.variables()[valueColumn].name:"Value";
+    ts << "Summary by Group: " << value << " by " << group << "\n" << QString(94,'=') << "\n";
+    ts << QString("%1%2%3%4%5%6%7\n").arg("Group",24).arg("N",8).arg("Missing",10).arg("Mean",13).arg("Std. Dev.",13).arg("Median",13).arg("Min / Max",18);
+    ts << QString(94,'-') << "\n";
+    for(const auto& r:rows){
+        QString mm=number(r.minimum)+" / "+number(r.maximum);
+        ts << r.group.left(24).leftJustified(24) << QString::number(r.n).rightJustified(8) << QString::number(r.missing).rightJustified(10)
+           << number(r.mean).rightJustified(13) << number(r.stdDev).rightJustified(13) << number(r.median).rightJustified(13) << mm.rightJustified(18) << "\n";
+    }
+    ts << "\nNote: N excludes missing/non-numeric outcome values within each group.\n";
+    return out;
 }
 
 QString AnalysisEngine::number(double value) { return std::isfinite(value) ? QString::number(value,'f',4) : "—"; }

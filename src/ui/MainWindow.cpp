@@ -53,7 +53,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.0"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.1"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -190,9 +190,8 @@ void MainWindow::buildMenus(){
     auto* analysisMenu=menuBar()->addMenu("&Analysis");
     auto* describeMenu=analysisMenu->addMenu("Describe");
     addAction(describeMenu,"Descriptive Statistics…",[this]{runDescriptiveStatistics();});
-    describeMenu->addSeparator();
-    describeMenu->addAction("Frequencies (coming soon)");
-    describeMenu->addAction("Summary by Group (coming soon)");
+    addAction(describeMenu,"Frequencies…",[this]{runFrequencies();});
+    addAction(describeMenu,"Summary by Group…",[this]{runSummaryByGroup();});
     for(const auto& group : QStringList{
             "Data","Cleaning","Transform","Tests","Regression",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
@@ -582,6 +581,31 @@ void MainWindow::runDescriptiveStatistics(){
     statusBar()->showMessage(QString("Descriptive statistics completed for %1 numeric variable(s)").arg(results.size()),5000);
 }
 
+
+void MainWindow::runFrequencies(){
+    if(m_data.columnCount()==0){ QMessageBox::information(this,"Frequencies","Import data or add a variable first."); return; }
+    QStringList names; for(const auto& v:m_data.variables()) names << v.name;
+    bool ok=false; QString choice=QInputDialog::getItem(this,"Frequencies","Variable:",names,0,false,&ok); if(!ok)return;
+    int column=names.indexOf(choice); if(column<0)return;
+    const auto results=AnalysisEngine::frequencies(m_data,column);
+    if(results.isEmpty()){ QMessageBox::information(this,"Frequencies","No valid observations are available for this variable."); return; }
+    m_output->setPlainText(AnalysisEngine::formatFrequencyTable(m_data,column,results)); m_tabs->setCurrentWidget(m_output);
+    statusBar()->showMessage(QString("Frequency table completed for '%1'").arg(choice),5000);
+}
+
+void MainWindow::runSummaryByGroup(){
+    if(m_data.columnCount()<2){ QMessageBox::information(this,"Summary by Group","At least one grouping variable and one numeric variable are required."); return; }
+    QStringList numeric, all; for(const auto& v:m_data.variables()){ all<<v.name; if(v.type==VariableType::Numeric) numeric<<v.name; }
+    if(numeric.isEmpty()){ QMessageBox::information(this,"Summary by Group","No numeric outcome variables are available."); return; }
+    bool ok=false; QString valueName=QInputDialog::getItem(this,"Summary by Group","Numeric variable:",numeric,0,false,&ok); if(!ok)return;
+    QString groupName=QInputDialog::getItem(this,"Summary by Group","Group variable:",all,0,false,&ok); if(!ok)return;
+    int valueCol=all.indexOf(valueName), groupCol=all.indexOf(groupName); if(valueCol<0||groupCol<0||valueCol==groupCol){QMessageBox::information(this,"Summary by Group","The grouping and numeric variables must be different.");return;}
+    const auto results=AnalysisEngine::summaryByGroup(m_data,groupCol,valueCol);
+    if(results.isEmpty()){ QMessageBox::information(this,"Summary by Group","No usable groups or observations were found."); return; }
+    m_output->setPlainText(AnalysisEngine::formatGroupSummaryTable(m_data,groupCol,valueCol,results)); m_tabs->setCurrentWidget(m_output);
+    statusBar()->showMessage(QString("Grouped summary completed: %1 by %2").arg(valueName,groupName),5000);
+}
+
 void MainWindow::undo(){m_undoStack->undo();m_state.setDirty(true);refreshDataView();}
 void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataView();}
 
@@ -589,7 +613,7 @@ void MainWindow::applyFilter(){const QString q=m_filterEdit->text().trimmed();QV
 void MainWindow::clearFilter(){m_filterEdit->clear();refreshDataView();}
 void MainWindow::replaceText(){bool ok=false;const auto find=QInputDialog::getText(this,"Find / Replace","Find:",QLineEdit::Normal,"",&ok);if(!ok||find.isEmpty())return;const auto repl=QInputDialog::getText(this,"Find / Replace","Replace with:",QLineEdit::Normal,"",&ok);if(!ok)return;int count=0;for(int r=0;r<m_data.rowCount();++r)for(int c=0;c<m_data.columnCount();++c){auto s=m_data.value(r,c).toString();if(s.contains(find,Qt::CaseInsensitive)){s.replace(find,repl,Qt::CaseInsensitive);QString err;if(m_data.validateValue(c,s,&err)) {m_data.setValue(r,c,s);++count;}}}if(count){m_state.setDirty(true);refreshDataView();}m_output->setPlainText(QString("Find / Replace complete. %1 cells changed.").arg(count));}
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.4.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.4.1 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){
