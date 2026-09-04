@@ -58,7 +58,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.5.0"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.6.0"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -229,8 +229,10 @@ void MainWindow::buildMenus(){
     addAction(testsMenu,"Paired-Samples t Test…",[this]{runPairedTTest();});
     addAction(testsMenu,"Chi-Square Test of Independence…",[this]{runChiSquare();});
     addAction(testsMenu,"One-Way ANOVA…",[this]{runOneWayAnova();});
+    auto* regressionMenu=analysisMenu->addMenu("Regression");
+    addAction(regressionMenu,"Simple Linear Regression…",[this]{runSimpleLinearRegression();});
     for(const auto& group : QStringList{
-            "Data","Cleaning","Transform","Regression",
+            "Data","Cleaning","Transform",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
             "Machine Learning","Graphs","Diagnostics","Interpret","Reports"}) {
         auto* groupMenu=analysisMenu->addMenu(group);
@@ -745,6 +747,34 @@ void MainWindow::runOneWayAnova(){
     m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("One-way ANOVA completed",5000);
 }
 
+
+void MainWindow::runSimpleLinearRegression(){
+    QStringList numeric;
+    for(const auto& v:m_data.variables()) if(v.type==VariableType::Numeric) numeric<<v.name;
+    if(numeric.size()<2){QMessageBox::information(this,"Simple Linear Regression","At least two numeric variables are required: one predictor (X) and one outcome (Y).");return;}
+    bool ok=false;
+    QString y=QInputDialog::getItem(this,"Simple Linear Regression","Outcome variable (Y):",numeric,0,false,&ok);if(!ok)return;
+    QString x=QInputDialog::getItem(this,"Simple Linear Regression","Predictor variable (X):",numeric,0,false,&ok);if(!ok)return;
+    if(x==y){QMessageBox::information(this,"Simple Linear Regression","Choose different outcome and predictor variables.");return;}
+    const auto r=AnalysisEngine::simpleLinearRegression(m_data,numeric.indexOf(x),numeric.indexOf(y));
+    if(r.complete<3){showResultMessage("Simple Linear Regression","At least 3 complete numeric observations are required. Observations with blank, declared-missing or invalid X/Y values cannot be used in the fitted model.");return;}
+    const QString interpretation = r.pSlope<0.05
+        ? QString("The estimated slope is statistically significant at α = 0.05; a one-unit increase in %1 is associated with an estimated %2-unit change in %3.").arg(x,AnalysisEngine::number(r.slope),y)
+        : QString("The estimated slope is not statistically significant at α = 0.05; the data do not provide strong evidence of a linear association between %1 and %2.").arg(x,y);
+    QVector<QStringList> table={
+        {"Intercept",AnalysisEngine::number(r.intercept),AnalysisEngine::number(r.seIntercept),AnalysisEngine::number(r.tIntercept),AnalysisEngine::number(r.pIntercept),AnalysisEngine::number(r.interceptCiLow),AnalysisEngine::number(r.interceptCiHigh)},
+        {x,AnalysisEngine::number(r.slope),AnalysisEngine::number(r.seSlope),AnalysisEngine::number(r.tSlope),AnalysisEngine::number(r.pSlope),AnalysisEngine::number(r.slopeCiLow),AnalysisEngine::number(r.slopeCiHigh)}
+    };
+    const QString summary=QString("Complete N: %1  |  R²: %2  |  Adjusted R²: %3  |  RMSE: %4  |  F(1,%5): %6  |  Model p-value: %7  |  Durbin–Watson: %8")
+        .arg(r.complete).arg(AnalysisEngine::number(r.rSquared)).arg(AnalysisEngine::number(r.adjustedRSquared)).arg(AnalysisEngine::number(r.rmse))
+        .arg(static_cast<int>(r.dfResidual)).arg(AnalysisEngine::number(r.f)).arg(AnalysisEngine::number(r.fP)).arg(AnalysisEngine::number(r.durbinWatson));
+    const QString note=QString("Model: %1 = %2 + (%3 × %4). %5 Observation accounting — total observations: %6; complete: %7; X blank: %8; Y blank: %9; X declared missing: %10; Y declared missing: %11; X non-numeric/invalid: %12; Y non-numeric/invalid: %13.")
+        .arg(y,AnalysisEngine::number(r.intercept),AnalysisEngine::number(r.slope),x,interpretation)
+        .arg(r.observations).arg(r.complete).arg(r.xBlank).arg(r.yBlank).arg(r.xDeclaredMissing).arg(r.yDeclaredMissing).arg(r.xNonNumeric).arg(r.yNonNumeric);
+    showResultTable("Simple Linear Regression — "+y+" on "+x,{"Term","Estimate","Std. Error","t","p-value","95% CI low","95% CI high"},table,{1,2,3,4,5,6},note,summary);
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Simple linear regression completed",5000);
+}
+
 void MainWindow::undo(){m_undoStack->undo();m_state.setDirty(true);refreshDataView();}
 void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataView();}
 
@@ -852,7 +882,7 @@ void MainWindow::applyResultsFormatting(){
 }
 
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.5.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.6.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){

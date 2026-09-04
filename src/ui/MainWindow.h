@@ -63,6 +63,7 @@ private slots:
     void runPairedTTest();
     void runChiSquare();
     void runOneWayAnova();
+    void runSimpleLinearRegression();
     void formatResultsTables();
     void undo();
     void redo();

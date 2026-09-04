@@ -29,6 +29,13 @@ struct PairedTResult : ObservationAccounting { int pairs{0}; double meanDifferen
 struct ChiSquareResult : ObservationAccounting { int rows{0}, columns{0}; double chiSquare{NAN}, df{NAN}, p{NAN}, cramersV{NAN}; QVector<QString> rowLabels, columnLabels; QVector<QVector<double>> observed, expected; };
 struct AnovaGroup { QString group; int observations{0}, valid{0}, blank{0}, declaredMissing{0}, nonNumeric{0}; double mean{NAN}, stdDev{NAN}; };
 struct AnovaResult : ObservationAccounting { int groups{0}; double grandMean{NAN}, ssBetween{NAN}, ssWithin{NAN}, ssTotal{NAN}, msBetween{NAN}, msWithin{NAN}, f{NAN}, dfBetween{NAN}, dfWithin{NAN}, p{NAN}, etaSquared{NAN}; QVector<AnovaGroup> groupStats; };
+struct RegressionResult {
+    int observations{0}, complete{0}, xBlank{0}, yBlank{0}, xDeclaredMissing{0}, yDeclaredMissing{0}, xNonNumeric{0}, yNonNumeric{0};
+    double intercept{NAN}, slope{NAN}, seIntercept{NAN}, seSlope{NAN}, tIntercept{NAN}, tSlope{NAN}, pIntercept{NAN}, pSlope{NAN};
+    double interceptCiLow{NAN}, interceptCiHigh{NAN}, slopeCiLow{NAN}, slopeCiHigh{NAN};
+    double r{NAN}, rSquared{NAN}, adjustedRSquared{NAN}, ssRegression{NAN}, ssResidual{NAN}, ssTotal{NAN};
+    double msRegression{NAN}, msResidual{NAN}, f{NAN}, fP{NAN}, dfRegression{NAN}, dfResidual{NAN}, rmse{NAN}, durbinWatson{NAN};
+};
 
 class AnalysisEngine {
 public:
@@ -43,6 +50,7 @@ public:
     static PairedTResult pairedTTest(const DataSet&, int firstColumn, int secondColumn, const QVector<int>& rows = {});
     static ChiSquareResult chiSquare(const DataSet&, int rowColumn, int columnColumn, const QVector<int>& rows = {});
     static AnovaResult oneWayAnova(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});
+    static RegressionResult simpleLinearRegression(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
 
     static QString number(double value);
 
@@ -53,6 +61,7 @@ private:
     static double percentile(QVector<double> values, double p);
     static double normalCdf(double x);
     static double studentTCdf(double t, double df);
+    static double studentTQuantile(double p, double df);
     static double chiSquareSurvival(double x, double df);
     static double fSurvival(double f, double d1, double d2);
     static double logGamma(double x);

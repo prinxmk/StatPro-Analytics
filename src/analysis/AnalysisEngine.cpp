@@ -198,6 +198,16 @@ double AnalysisEngine::studentTCdf(double t,double df){
     if(!std::isfinite(t)||df<=0)return NAN; if(t==0)return 0.5;
     const double x=df/(df+t*t); const double ib=regularizedBeta(x,df/2.0,0.5); return t>0 ? 1.0-0.5*ib : 0.5*ib;
 }
+double AnalysisEngine::studentTQuantile(double p,double df){
+    if(!std::isfinite(p)||p<=0.0||p>=1.0||df<=0.0)return NAN;
+    if(p==0.5)return 0.0;
+    const bool neg=p<0.5; const double target=neg?1.0-p:p;
+    double lo=0.0, hi=1.0;
+    while(studentTCdf(hi,df)<target && hi<1e8) hi*=2.0;
+    for(int i=0;i<100;++i){const double mid=(lo+hi)/2.0;if(studentTCdf(mid,df)<target)lo=mid;else hi=mid;}
+    return neg?-(lo+hi)/2.0:(lo+hi)/2.0;
+}
+
 double AnalysisEngine::chiSquareSurvival(double x,double df){ return (x<0||df<=0)?NAN:regularizedGammaQ(df/2.0,x/2.0); }
 double AnalysisEngine::fSurvival(double f,double d1,double d2){ if(f<0||d1<=0||d2<=0)return NAN; return regularizedBeta(d2/(d2+d1*f),d2/2.0,d1/2.0); }
 
@@ -272,6 +282,47 @@ AnovaResult AnalysisEngine::oneWayAnova(const DataSet& data,int groupColumn,int 
     for(const auto& s:out.groupStats){ if(s.group.startsWith("(")||s.valid<=0) continue; const auto x=vals.value(s.group); out.ssBetween+=s.valid*std::pow(s.mean-out.grandMean,2); for(double v:x) out.ssWithin+=std::pow(v-s.mean,2); }
     out.ssTotal=out.ssBetween+out.ssWithin; out.dfBetween=testGroups-1; out.dfWithin=out.valid-testGroups;
     if(out.dfWithin<=0)return out; out.msBetween=out.ssBetween/out.dfBetween; out.msWithin=out.ssWithin/out.dfWithin; out.f=out.msWithin>0?out.msBetween/out.msWithin:NAN; out.p=std::isfinite(out.f)?fSurvival(out.f,out.dfBetween,out.dfWithin):NAN; out.etaSquared=out.ssTotal>0?out.ssBetween/out.ssTotal:NAN; return out;
+}
+
+RegressionResult AnalysisEngine::simpleLinearRegression(const DataSet& data,int xColumn,int yColumn,const QVector<int>& rows){
+    RegressionResult out; const auto use=analysisRows(data,rows); out.observations=use.size();
+    QVector<double>x,y; x.reserve(use.size()); y.reserve(use.size());
+    for(int r:use){
+        const QString cx=classify(data,r,xColumn), cy=classify(data,r,yColumn);
+        if(cx=="Blank") ++out.xBlank; else if(cx=="DeclaredMissing") ++out.xDeclaredMissing; else if(cx=="NonNumeric") ++out.xNonNumeric;
+        if(cy=="Blank") ++out.yBlank; else if(cy=="DeclaredMissing") ++out.yDeclaredMissing; else if(cy=="NonNumeric") ++out.yNonNumeric;
+        double vx,vy; if(cx=="Valid"&&cy=="Valid"&&numericValue(data,r,xColumn,vx)&&numericValue(data,r,yColumn,vy)){x.push_back(vx);y.push_back(vy);}
+    }
+    out.complete=x.size(); if(x.size()<3)return out;
+    double mx=sampleMean(x), my=sampleMean(y), sxx=0, syy=0, sxy=0;
+    for(int i=0;i<x.size();++i){const double dx=x[i]-mx,dy=y[i]-my;sxx+=dx*dx;syy+=dy*dy;sxy+=dx*dy;}
+    if(sxx<=0||syy<0)return out;
+    out.slope=sxy/sxx; out.intercept=my-out.slope*mx;
+    out.ssTotal=syy; out.ssRegression=out.slope*sxy; out.ssResidual=std::max(0.0,out.ssTotal-out.ssRegression);
+    out.dfRegression=1; out.dfResidual=x.size()-2; out.msRegression=out.ssRegression; out.msResidual=out.ssResidual/out.dfResidual;
+    out.r=syy>0?std::max(-1.0,std::min(1.0,sxy/std::sqrt(sxx*syy))):NAN;
+    out.rSquared=syy>0?std::max(0.0,std::min(1.0,out.ssRegression/syy)):NAN;
+    out.adjustedRSquared=1.0-(1.0-out.rSquared)*(x.size()-1.0)/(x.size()-2.0);
+    out.rmse=std::sqrt(out.msResidual);
+    if(out.msResidual>0){
+        out.seSlope=std::sqrt(out.msResidual/sxx);
+        out.seIntercept=std::sqrt(out.msResidual*(1.0/x.size()+mx*mx/sxx));
+        out.tSlope=out.slope/out.seSlope; out.tIntercept=out.intercept/out.seIntercept;
+        out.pSlope=2.0*(1.0-studentTCdf(std::fabs(out.tSlope),out.dfResidual));
+        out.pIntercept=2.0*(1.0-studentTCdf(std::fabs(out.tIntercept),out.dfResidual));
+        const double crit=studentTQuantile(0.975,out.dfResidual);
+        out.slopeCiLow=out.slope-crit*out.seSlope; out.slopeCiHigh=out.slope+crit*out.seSlope;
+        out.interceptCiLow=out.intercept-crit*out.seIntercept; out.interceptCiHigh=out.intercept+crit*out.seIntercept;
+        out.f=out.ssRegression/out.msResidual; out.fP=fSurvival(out.f,1.0,out.dfResidual);
+    } else {
+        out.seSlope=0; out.seIntercept=0; out.tSlope=out.slope==0?0:std::copysign(INFINITY,out.slope); out.tIntercept=out.intercept==0?0:std::copysign(INFINITY,out.intercept); out.pSlope=out.slope==0?1.0:0.0; out.pIntercept=out.intercept==0?1.0:0.0; out.slopeCiLow=out.slope; out.slopeCiHigh=out.slope; out.interceptCiLow=out.intercept; out.interceptCiHigh=out.intercept; out.f=INFINITY; out.fP=0.0;
+    }
+    if(out.ssResidual>0){
+        double dwNumerator=0, previous=0; bool first=true;
+        for(int i=0;i<x.size();++i){const double e=y[i]-(out.intercept+out.slope*x[i]);if(!first)dwNumerator+=std::pow(e-previous,2);previous=e;first=false;}
+        out.durbinWatson=dwNumerator/out.ssResidual;
+    }
+    return out;
 }
 
 QString AnalysisEngine::number(double value) { return std::isfinite(value) ? QString::number(value,'f',4) : "—"; }
