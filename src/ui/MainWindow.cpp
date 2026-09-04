@@ -58,7 +58,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.6.2"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle(QString("StatPro Analytics %1").arg(QApplication::applicationVersion())); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -720,24 +720,32 @@ void MainWindow::runIndependentTTest(){
     if(!ok)return;
     const int valueColumn=m_data.columnNames().indexOf(value);
     QStringList groupingNames;
+    QMap<QString, QStringList> groupingLevels;
     for(const auto&v:m_data.variables()){
         if(v.name==value) continue;
         const int c=m_data.columnNames().indexOf(v.name);
-        if(AnalysisEngine::independentGroupLevels(m_data,c).size()==2) groupingNames<<v.name;
+        const QStringList levels=AnalysisEngine::independentGroupLevels(m_data,c);
+        if(levels.size()>=2){ groupingNames<<v.name; groupingLevels.insert(v.name,levels); }
     }
     if(groupingNames.isEmpty()){
-        showResultMessage("Independent-Samples t Test","No grouping variable with exactly two non-missing groups was found. Select or create a grouping variable with exactly two groups.");
+        showResultMessage("Independent-Samples t Test","No grouping variable with at least two non-missing groups was found. Select or create a grouping variable with two or more valid groups.");
         return;
     }
-    QString group=QInputDialog::getItem(this,"Independent-Samples t Test","Grouping variable (exactly 2 groups):",groupingNames,0,false,&ok);
+    QString group=QInputDialog::getItem(this,"Independent-Samples t Test","Grouping variable:",groupingNames,0,false,&ok);
     if(!ok)return;
     const int groupColumn=m_data.columnNames().indexOf(group);
+    const QStringList levels=groupingLevels.value(group);
+    QString group1=QInputDialog::getItem(this,"Independent-Samples t Test","Group 1:",levels,0,false,&ok);
+    if(!ok)return;
+    QStringList remaining=levels; remaining.removeAll(group1);
+    QString group2=QInputDialog::getItem(this,"Independent-Samples t Test","Group 2:",remaining,0,false,&ok);
+    if(!ok)return;
     QStringList assumptions={"Welch (unequal variances, recommended)","Equal variances assumed"};
     QString assumption=QInputDialog::getItem(this,"Independent-Samples t Test","Variance assumption:",assumptions,0,false,&ok);
     if(!ok)return;
-    const auto r=AnalysisEngine::independentTTest(m_data,groupColumn,valueColumn,assumption.startsWith("Equal"));
+    const auto r=AnalysisEngine::independentTTest(m_data,groupColumn,valueColumn,group1,group2,assumption.startsWith("Equal"));
     if(r.group1.isEmpty()||r.group2.isEmpty()){
-        const QString detail=r.availableGroups.isEmpty()?"No valid group levels were found.":QString("Found %1 valid groups: %2. Exactly two groups are required.").arg(r.availableGroups.size()).arg(r.availableGroups.join(", "));
+        const QString detail=r.availableGroups.isEmpty()?"No valid group levels were found.":QString("Found %1 valid groups: %2. Select any two groups for the comparison.").arg(r.availableGroups.size()).arg(r.availableGroups.join(", "));
         showResultMessage("Independent-Samples t Test",detail);return;
     }
     if(r.n1<2||r.n2<2){
@@ -917,7 +925,7 @@ void MainWindow::applyResultsFormatting(){
 }
 
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.6.2 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics %1 — %2%3").arg(QApplication::applicationVersion(),m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){

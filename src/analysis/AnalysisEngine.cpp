@@ -254,12 +254,12 @@ QStringList AnalysisEngine::independentGroupLevels(const DataSet& data,int group
     return out;
 }
 
-IndependentTResult AnalysisEngine::independentTTest(const DataSet& data,int groupColumn,int valueColumn,bool equalVariances,const QVector<int>& rows){
+IndependentTResult AnalysisEngine::independentTTest(const DataSet& data,int groupColumn,int valueColumn,const QString& group1,const QString& group2,bool equalVariances,const QVector<int>& rows){
     IndependentTResult out; const auto use=analysisRows(data,rows); QMap<QString,QVector<double>> vals; QMap<QString,ObservationAccounting> acc;
     if(groupColumn<0||groupColumn>=data.columnCount()||valueColumn<0||valueColumn>=data.columnCount()||groupColumn==valueColumn) return out;
     const QStringList groups=independentGroupLevels(data,groupColumn,rows); out.availableGroups=groups;
-    if(groups.size()!=2) return out;
-    for(const QString& g:groups) acc[g]=ObservationAccounting{};
+    if(groups.size()<2 || group1.isEmpty() || group2.isEmpty() || group1==group2 || !groups.contains(group1) || !groups.contains(group2)) return out;
+    acc[group1]=ObservationAccounting{}; acc[group2]=ObservationAccounting{};
     for(int r:use){
         const QString gc=classify(data,r,groupColumn);
         QString g;
@@ -274,8 +274,8 @@ IndependentTResult AnalysisEngine::independentTTest(const DataSet& data,int grou
         double v;
         if(numericValue(data,r,valueColumn,v)){++a.valid;vals[g].push_back(v);}else ++a.nonNumeric;
     }
-    out.group1=groups[0];out.group2=groups[1];out.group1Accounting=acc[groups[0]];out.group2Accounting=acc[groups[1]];
-    const auto x=vals.value(groups[0]),y=vals.value(groups[1]); out.n1=x.size();out.n2=y.size();
+    out.group1=group1;out.group2=group2;out.group1Accounting=acc[group1];out.group2Accounting=acc[group2];
+    const auto x=vals.value(group1),y=vals.value(group2); out.n1=x.size();out.n2=y.size();
     if(x.size()<2||y.size()<2)return out;
     out.mean1=sampleMean(x);out.mean2=sampleMean(y);out.sd1=sampleSd(x);out.sd2=sampleSd(y);out.difference=out.mean1-out.mean2;
     double se2=0;

@@ -47,7 +47,7 @@ public:
 
     static CorrelationResult pearsonCorrelation(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static OneSampleTResult oneSampleTTest(const DataSet&, int column, double testMean, const QVector<int>& rows = {});
-    static IndependentTResult independentTTest(const DataSet&, int groupColumn, int valueColumn, bool equalVariances = false, const QVector<int>& rows = {});
+    static IndependentTResult independentTTest(const DataSet&, int groupColumn, int valueColumn, const QString& group1, const QString& group2, bool equalVariances = false, const QVector<int>& rows = {});
     static QStringList independentGroupLevels(const DataSet&, int groupColumn, const QVector<int>& rows = {});
     static PairedTResult pairedTTest(const DataSet&, int firstColumn, int secondColumn, const QVector<int>& rows = {});
     static ChiSquareResult chiSquare(const DataSet&, int rowColumn, int columnColumn, const QVector<int>& rows = {});
