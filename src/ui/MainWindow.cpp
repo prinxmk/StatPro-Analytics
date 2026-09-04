@@ -58,7 +58,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.6.0"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.6.2"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -688,7 +688,9 @@ void MainWindow::runPearsonCorrelation(){
     if(names.size()<2){QMessageBox::information(this,"Pearson Correlation","At least two numeric variables are required.");return;}
     bool ok=false; QString x=QInputDialog::getItem(this,"Pearson Correlation","Variable X:",names,0,false,&ok);if(!ok)return;
     QString y=QInputDialog::getItem(this,"Pearson Correlation","Variable Y:",names,0,false,&ok);if(!ok)return;if(x==y){QMessageBox::information(this,"Pearson Correlation","Choose two different variables.");return;}
-    const auto r=AnalysisEngine::pearsonCorrelation(m_data,names.indexOf(x),names.indexOf(y));
+    const int xColumn=m_data.columnNames().indexOf(x); const int yColumn=m_data.columnNames().indexOf(y);
+    if(xColumn<0||yColumn<0){showResultMessage("Pearson Correlation","The selected variables could not be found in the dataset.");return;}
+    const auto r=AnalysisEngine::pearsonCorrelation(m_data,xColumn,yColumn);
     if(r.pairs<2){showResultMessage("Pearson Correlation","Fewer than 2 complete numeric pairs are available.");return;}
     QString interpretation=std::fabs(r.r)<0.1?"negligible":std::fabs(r.r)<0.3?"weak":std::fabs(r.r)<0.5?"moderate":"strong";
     interpretation += r.r>=0?" positive":" negative";
@@ -701,7 +703,9 @@ void MainWindow::runOneSampleTTest(){
     QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.isEmpty()){QMessageBox::information(this,"One-Sample t Test","No numeric variables are available.");return;}
     bool ok=false;QString name=QInputDialog::getItem(this,"One-Sample t Test","Numeric variable:",names,0,false,&ok);if(!ok)return;
     double mu=QInputDialog::getDouble(this,"One-Sample t Test","Test value (μ₀):",0.0,-1e12,1e12,6,&ok);if(!ok)return;
-    const auto r=AnalysisEngine::oneSampleTTest(m_data,names.indexOf(name),mu);if(r.valid<2){showResultMessage("One-Sample t Test","At least 2 valid numeric observations are required.");return;}
+    const int column=m_data.columnNames().indexOf(name);
+    if(column<0){showResultMessage("One-Sample t Test","The selected variable could not be found in the dataset.");return;}
+    const auto r=AnalysisEngine::oneSampleTTest(m_data,column,mu);if(r.valid<2){showResultMessage("One-Sample t Test","At least 2 valid numeric observations are required.");return;}
     QVector<QStringList> rows={{name,QString::number(r.valid),AnalysisEngine::number(r.mean),AnalysisEngine::number(r.stdDev),AnalysisEngine::number(r.testMean),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensD)}};
     showResultTable("One-Sample t Test — "+name,{"Variable","Valid N","Mean","Std. Dev.","Test mean","t","df","p-value","95% CI low","95% CI high","Cohen's d"},rows,{1,2,3,4,5,6,7,8,9,10},inferentialAccounting(r),"The confidence interval is for the estimated mean difference (sample mean − test mean). Two-sided p-value; Cohen's d uses the sample standard deviation.");
     m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("One-sample t test completed",5000);
@@ -722,7 +726,9 @@ void MainWindow::runIndependentTTest(){
 void MainWindow::runPairedTTest(){
     QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.size()<2){QMessageBox::information(this,"Paired-Samples t Test","At least two numeric variables are required.");return;}
     bool ok=false;QString first=QInputDialog::getItem(this,"Paired-Samples t Test","First measurement:",names,0,false,&ok);if(!ok)return;QString second=QInputDialog::getItem(this,"Paired-Samples t Test","Second measurement:",names,0,false,&ok);if(!ok)return;if(first==second){QMessageBox::information(this,"Paired-Samples t Test","Choose two different measurements.");return;}
-    const auto r=AnalysisEngine::pairedTTest(m_data,names.indexOf(first),names.indexOf(second));if(r.pairs<2){showResultMessage("Paired-Samples t Test","Fewer than 2 complete numeric pairs are available.");return;}
+    const int firstColumn=m_data.columnNames().indexOf(first); const int secondColumn=m_data.columnNames().indexOf(second);
+    if(firstColumn<0||secondColumn<0){showResultMessage("Paired-Samples t Test","The selected variables could not be found in the dataset.");return;}
+    const auto r=AnalysisEngine::pairedTTest(m_data,firstColumn,secondColumn);if(r.pairs<2){showResultMessage("Paired-Samples t Test","Fewer than 2 complete numeric pairs are available.");return;}
     QVector<QStringList> rows={{first+" − "+second,QString::number(r.pairs),AnalysisEngine::number(r.meanDifference),AnalysisEngine::number(r.sdDifference),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensDz)}};
     showResultTable("Paired-Samples t Test — "+first+" vs "+second,{"Difference","Complete pairs","Mean difference","SD difference","t","df","p-value","95% CI low","95% CI high","Cohen's dz"},rows,{1,2,3,4,5,6,7,8,9},inferentialAccounting(r),"Pairwise complete observations are used. Difference is first measurement − second measurement; Cohen's dz is based on the standard deviation of paired differences.");
     m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Paired-samples t test completed",5000);
@@ -756,7 +762,9 @@ void MainWindow::runSimpleLinearRegression(){
     QString y=QInputDialog::getItem(this,"Simple Linear Regression","Outcome variable (Y):",numeric,0,false,&ok);if(!ok)return;
     QString x=QInputDialog::getItem(this,"Simple Linear Regression","Predictor variable (X):",numeric,0,false,&ok);if(!ok)return;
     if(x==y){QMessageBox::information(this,"Simple Linear Regression","Choose different outcome and predictor variables.");return;}
-    const auto r=AnalysisEngine::simpleLinearRegression(m_data,numeric.indexOf(x),numeric.indexOf(y));
+    const int xColumn=m_data.columnNames().indexOf(x);
+    const int yColumn=m_data.columnNames().indexOf(y);
+    const auto r=AnalysisEngine::simpleLinearRegression(m_data,xColumn,yColumn);
     if(r.complete<3){showResultMessage("Simple Linear Regression","At least 3 complete numeric observations are required. Observations with blank, declared-missing or invalid X/Y values cannot be used in the fitted model.");return;}
     const QString interpretation = r.pSlope<0.05
         ? QString("The estimated slope is statistically significant at α = 0.05; a one-unit increase in %1 is associated with an estimated %2-unit change in %3.").arg(x,AnalysisEngine::number(r.slope),y)
@@ -882,7 +890,7 @@ void MainWindow::applyResultsFormatting(){
 }
 
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.6.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.6.2 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){

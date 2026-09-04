@@ -1,4 +1,8 @@
-# StatPro Analytics — Phase 1F / v0.6.0
+## v0.6.2 regression fix
+
+Fixed Simple Linear Regression variable-to-column mapping so numeric variables that are not the first columns in the dataset are passed to the analysis engine using their actual dataset column indices. This prevents false "fewer than 3 complete observations" errors when the selected numeric variables contain valid data.
+
+# StatPro Analytics — Phase 1F / v0.6.2
 
 ## Regression
 
