@@ -57,6 +57,12 @@ private slots:
     void runDescriptiveStatistics();
     void runFrequencies();
     void runSummaryByGroup();
+    void runPearsonCorrelation();
+    void runOneSampleTTest();
+    void runIndependentTTest();
+    void runPairedTTest();
+    void runChiSquare();
+    void runOneWayAnova();
     void formatResultsTables();
     void undo();
     void redo();

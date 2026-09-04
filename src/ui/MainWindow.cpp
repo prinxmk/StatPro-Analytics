@@ -45,6 +45,7 @@
 #include <QUndoCommand>
 #include <algorithm>
 #include <functional>
+#include <cmath>
 
 namespace StatPro {
 
@@ -57,7 +58,7 @@ private: MainWindow* m_w; int m_r,m_c; QString m_old,m_new;
 };
 
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),m_undoStack(new QUndoStack(this)){
-    resize(1550,920); setWindowTitle("StatPro Analytics 0.4.2"); buildInterface(); applyTheme();
+    resize(1550,920); setWindowTitle("StatPro Analytics 0.5.0"); buildInterface(); applyTheme();
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateTitle);
     connect(&m_state,&AppState::dirtyChanged,this,&MainWindow::updateStatus);
 }
@@ -221,8 +222,15 @@ void MainWindow::buildMenus(){
     addAction(describeMenu,"Descriptive Statistics…",[this]{runDescriptiveStatistics();});
     addAction(describeMenu,"Frequencies…",[this]{runFrequencies();});
     addAction(describeMenu,"Summary by Group…",[this]{runSummaryByGroup();});
+    auto* testsMenu=analysisMenu->addMenu("Tests");
+    addAction(testsMenu,"Pearson Correlation…",[this]{runPearsonCorrelation();});
+    addAction(testsMenu,"One-Sample t Test…",[this]{runOneSampleTTest();});
+    addAction(testsMenu,"Independent-Samples t Test…",[this]{runIndependentTTest();});
+    addAction(testsMenu,"Paired-Samples t Test…",[this]{runPairedTTest();});
+    addAction(testsMenu,"Chi-Square Test of Independence…",[this]{runChiSquare();});
+    addAction(testsMenu,"One-Way ANOVA…",[this]{runOneWayAnova();});
     for(const auto& group : QStringList{
-            "Data","Cleaning","Transform","Tests","Regression",
+            "Data","Cleaning","Transform","Regression",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
             "Machine Learning","Graphs","Diagnostics","Interpret","Reports"}) {
         auto* groupMenu=analysisMenu->addMenu(group);
@@ -666,6 +674,77 @@ void MainWindow::runSummaryByGroup(){
     statusBar()->showMessage(QString("Grouped summary completed: %1 by %2").arg(valueName,groupName),5000);
 }
 
+
+
+static QString inferentialAccounting(const StatPro::ObservationAccounting& a) {
+    return QString("Observations: %1  |  Valid: %2  |  Blank: %3  |  Declared missing: %4  |  Non-numeric / invalid: %5")
+        .arg(a.observations).arg(a.valid).arg(a.blank).arg(a.declaredMissing).arg(a.nonNumeric);
+}
+
+void MainWindow::runPearsonCorrelation(){
+    QStringList names; for(const auto& v:m_data.variables()) if(v.type==VariableType::Numeric) names<<v.name;
+    if(names.size()<2){QMessageBox::information(this,"Pearson Correlation","At least two numeric variables are required.");return;}
+    bool ok=false; QString x=QInputDialog::getItem(this,"Pearson Correlation","Variable X:",names,0,false,&ok);if(!ok)return;
+    QString y=QInputDialog::getItem(this,"Pearson Correlation","Variable Y:",names,0,false,&ok);if(!ok)return;if(x==y){QMessageBox::information(this,"Pearson Correlation","Choose two different variables.");return;}
+    const auto r=AnalysisEngine::pearsonCorrelation(m_data,names.indexOf(x),names.indexOf(y));
+    if(r.pairs<2){showResultMessage("Pearson Correlation","Fewer than 2 complete numeric pairs are available.");return;}
+    QString interpretation=std::fabs(r.r)<0.1?"negligible":std::fabs(r.r)<0.3?"weak":std::fabs(r.r)<0.5?"moderate":"strong";
+    interpretation += r.r>=0?" positive":" negative";
+    QVector<QStringList> rows={{x+" × "+y,QString::number(r.pairs),AnalysisEngine::number(r.r),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),interpretation}};
+    showResultTable("Pearson Correlation — "+x+" × "+y,{"Variables","Complete pairs","Pearson r","p-value","95% CI low","95% CI high","Interpretation"},rows,{1,2,3,4,5},inferentialAccounting(r),"Pairwise complete numeric observations are used. Missing and invalid values remain accounted for in the observation summary.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Pearson correlation completed",5000);
+}
+
+void MainWindow::runOneSampleTTest(){
+    QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.isEmpty()){QMessageBox::information(this,"One-Sample t Test","No numeric variables are available.");return;}
+    bool ok=false;QString name=QInputDialog::getItem(this,"One-Sample t Test","Numeric variable:",names,0,false,&ok);if(!ok)return;
+    double mu=QInputDialog::getDouble(this,"One-Sample t Test","Test value (μ₀):",0.0,-1e12,1e12,6,&ok);if(!ok)return;
+    const auto r=AnalysisEngine::oneSampleTTest(m_data,names.indexOf(name),mu);if(r.valid<2){showResultMessage("One-Sample t Test","At least 2 valid numeric observations are required.");return;}
+    QVector<QStringList> rows={{name,QString::number(r.valid),AnalysisEngine::number(r.mean),AnalysisEngine::number(r.stdDev),AnalysisEngine::number(r.testMean),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensD)}};
+    showResultTable("One-Sample t Test — "+name,{"Variable","Valid N","Mean","Std. Dev.","Test mean","t","df","p-value","95% CI low","95% CI high","Cohen's d"},rows,{1,2,3,4,5,6,7,8,9,10},inferentialAccounting(r),"The confidence interval is for the estimated mean difference (sample mean − test mean). Two-sided p-value; Cohen's d uses the sample standard deviation.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("One-sample t test completed",5000);
+}
+
+void MainWindow::runIndependentTTest(){
+    QStringList all,numeric;for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"Independent-Samples t Test","A numeric outcome and a grouping variable are required.");return;}
+    bool ok=false;QString value=QInputDialog::getItem(this,"Independent-Samples t Test","Numeric outcome:",numeric,0,false,&ok);if(!ok)return;QString group=QInputDialog::getItem(this,"Independent-Samples t Test","Grouping variable (exactly 2 groups):",all,0,false,&ok);if(!ok)return;if(value==group){QMessageBox::information(this,"Independent-Samples t Test","The outcome and grouping variables must be different.");return;}
+    QStringList assumptions={"Welch (unequal variances, recommended)","Equal variances assumed"};QString assumption=QInputDialog::getItem(this,"Independent-Samples t Test","Variance assumption:",assumptions,0,false,&ok);if(!ok)return;
+    const auto r=AnalysisEngine::independentTTest(m_data,all.indexOf(group),all.indexOf(value),assumption.startsWith("Equal"));
+    if(r.group1.isEmpty()||r.group2.isEmpty()){showResultMessage("Independent-Samples t Test","Exactly two groups with valid labels are required.");return;}if(r.n1<2||r.n2<2){showResultMessage("Independent-Samples t Test","Each group needs at least 2 valid numeric observations.");return;}
+    QVector<QStringList> rows={{r.group1,QString::number(r.n1),AnalysisEngine::number(r.mean1),AnalysisEngine::number(r.sd1),r.group2,QString::number(r.n2),AnalysisEngine::number(r.mean2),AnalysisEngine::number(r.sd2),AnalysisEngine::number(r.difference),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensD)}};
+    const QString summary=QString("%1: %2  |  %3: %4").arg(r.group1,inferentialAccounting(r.group1Accounting),r.group2,inferentialAccounting(r.group2Accounting));
+    showResultTable("Independent-Samples t Test — "+value+" by "+group,{"Group 1","N1","Mean 1","SD 1","Group 2","N2","Mean 2","SD 2","Mean difference","t","df","p-value","95% CI low","95% CI high","Cohen's d"},rows,{1,2,3,5,6,7,8,9,10,11,12,13,14},summary,assumption+". Difference is Group 1 − Group 2. Missing/invalid outcomes are accounted for separately within each group.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Independent-samples t test completed",5000);
+}
+
+void MainWindow::runPairedTTest(){
+    QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.size()<2){QMessageBox::information(this,"Paired-Samples t Test","At least two numeric variables are required.");return;}
+    bool ok=false;QString first=QInputDialog::getItem(this,"Paired-Samples t Test","First measurement:",names,0,false,&ok);if(!ok)return;QString second=QInputDialog::getItem(this,"Paired-Samples t Test","Second measurement:",names,0,false,&ok);if(!ok)return;if(first==second){QMessageBox::information(this,"Paired-Samples t Test","Choose two different measurements.");return;}
+    const auto r=AnalysisEngine::pairedTTest(m_data,names.indexOf(first),names.indexOf(second));if(r.pairs<2){showResultMessage("Paired-Samples t Test","Fewer than 2 complete numeric pairs are available.");return;}
+    QVector<QStringList> rows={{first+" − "+second,QString::number(r.pairs),AnalysisEngine::number(r.meanDifference),AnalysisEngine::number(r.sdDifference),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensDz)}};
+    showResultTable("Paired-Samples t Test — "+first+" vs "+second,{"Difference","Complete pairs","Mean difference","SD difference","t","df","p-value","95% CI low","95% CI high","Cohen's dz"},rows,{1,2,3,4,5,6,7,8,9},inferentialAccounting(r),"Pairwise complete observations are used. Difference is first measurement − second measurement; Cohen's dz is based on the standard deviation of paired differences.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Paired-samples t test completed",5000);
+}
+
+void MainWindow::runChiSquare(){
+    if(m_data.columnCount()<2){QMessageBox::information(this,"Chi-Square Test","At least two categorical variables are required.");return;}QStringList names;for(const auto&v:m_data.variables())names<<v.name;bool ok=false;QString row=QInputDialog::getItem(this,"Chi-Square Test of Independence","Row variable:",names,0,false,&ok);if(!ok)return;QString col=QInputDialog::getItem(this,"Chi-Square Test of Independence","Column variable:",names,0,false,&ok);if(!ok)return;if(row==col){QMessageBox::information(this,"Chi-Square Test","Choose two different variables.");return;}
+    const auto r=AnalysisEngine::chiSquare(m_data,names.indexOf(row),names.indexOf(col));if(r.rows<2||r.columns<2){showResultMessage("Chi-Square Test of Independence","At least 2 observed categories are required for each variable.");return;}
+    QVector<QStringList> table;for(int i=0;i<r.rows;++i)for(int j=0;j<r.columns;++j)table.push_back({r.rowLabels[i],r.columnLabels[j],AnalysisEngine::number(r.observed[i][j]),AnalysisEngine::number(r.expected[i][j])});
+    showResultTable("Chi-Square Test of Independence — "+row+" × "+col,{"Row category","Column category","Observed","Expected"},table,{2,3},inferentialAccounting(r),QString("χ² = %1  |  df = %2  |  p-value = %3  |  Cramér's V = %4. Expected counts are based on independence.").arg(AnalysisEngine::number(r.chiSquare)).arg(AnalysisEngine::number(r.df)).arg(AnalysisEngine::number(r.p)).arg(AnalysisEngine::number(r.cramersV)));
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Chi-square test completed",5000);
+}
+
+void MainWindow::runOneWayAnova(){
+    QStringList all,numeric;for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"One-Way ANOVA","A numeric outcome and grouping variable are required.");return;}bool ok=false;QString value=QInputDialog::getItem(this,"One-Way ANOVA","Numeric outcome:",numeric,0,false,&ok);if(!ok)return;QString group=QInputDialog::getItem(this,"One-Way ANOVA","Grouping variable:",all,0,false,&ok);if(!ok)return;if(value==group){QMessageBox::information(this,"One-Way ANOVA","The outcome and grouping variables must be different.");return;}
+    const auto r=AnalysisEngine::oneWayAnova(m_data,all.indexOf(group),all.indexOf(value));if(r.groups<2||r.valid<r.groups){showResultMessage("One-Way ANOVA","At least two groups with valid numeric observations are required.");return;}
+    QVector<QStringList> table;for(const auto&g:r.groupStats)table.push_back({"Group: "+g.group,QString::number(g.valid),AnalysisEngine::number(g.mean),AnalysisEngine::number(g.stdDev),"","","","",""});
+    table.push_back({"Between groups",QString::number(static_cast<int>(r.dfBetween)),"","",AnalysisEngine::number(r.ssBetween),AnalysisEngine::number(r.msBetween),AnalysisEngine::number(r.f),AnalysisEngine::number(r.p),AnalysisEngine::number(r.etaSquared)});
+    table.push_back({"Within groups",QString::number(static_cast<int>(r.dfWithin)),"","",AnalysisEngine::number(r.ssWithin),AnalysisEngine::number(r.msWithin),"","", ""});
+    table.push_back({"Total",QString::number(r.valid-1),AnalysisEngine::number(r.grandMean),"",AnalysisEngine::number(r.ssTotal),"","","", ""});
+    showResultTable("One-Way ANOVA — "+value+" by "+group,{"Source / group","Valid N","Mean","Std. Dev.","SS","MS","F","p-value","Eta-squared"},table,{1,2,3,4,5,6,7,8},inferentialAccounting(r),"The ANOVA test excludes observations with missing/invalid outcomes or missing/invalid group labels. Group-level counts are shown so excluded observations remain visible in the accounting.");
+    m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("One-way ANOVA completed",5000);
+}
+
 void MainWindow::undo(){m_undoStack->undo();m_state.setDirty(true);refreshDataView();}
 void MainWindow::redo(){m_undoStack->redo();m_state.setDirty(true);refreshDataView();}
 
@@ -773,7 +852,7 @@ void MainWindow::applyResultsFormatting(){
 }
 
 void MainWindow::updateTitle(){
-    setWindowTitle(QString("StatPro Analytics 0.4.2 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
+    setWindowTitle(QString("StatPro Analytics 0.5.0 — %1%2").arg(m_state.projectName(),m_state.dirty()?" *":""));
 }
 
 void MainWindow::updateStatus(){
