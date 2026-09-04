@@ -23,7 +23,8 @@ struct CorrelationResult : ObservationAccounting { int pairs{0}; double r{NAN}, 
 struct OneSampleTResult : ObservationAccounting { double testMean{NAN}, mean{NAN}, stdDev{NAN}, t{NAN}, df{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, cohensD{NAN}; };
 struct IndependentTResult {
     ObservationAccounting group1Accounting, group2Accounting;
-    QString group1, group2; int n1{0}, n2{0}; double mean1{NAN}, mean2{NAN}, sd1{NAN}, sd2{NAN}, difference{NAN}, t{NAN}, df{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, cohensD{NAN};
+    QString group1, group2;
+    QStringList availableGroups; int n1{0}, n2{0}; double mean1{NAN}, mean2{NAN}, sd1{NAN}, sd2{NAN}, difference{NAN}, t{NAN}, df{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, cohensD{NAN};
 };
 struct PairedTResult : ObservationAccounting { int pairs{0}; double meanDifference{NAN}, sdDifference{NAN}, t{NAN}, df{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, cohensDz{NAN}; };
 struct ChiSquareResult : ObservationAccounting { int rows{0}, columns{0}; double chiSquare{NAN}, df{NAN}, p{NAN}, cramersV{NAN}; QVector<QString> rowLabels, columnLabels; QVector<QVector<double>> observed, expected; };
@@ -46,7 +47,8 @@ public:
 
     static CorrelationResult pearsonCorrelation(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static OneSampleTResult oneSampleTTest(const DataSet&, int column, double testMean, const QVector<int>& rows = {});
-    static IndependentTResult independentTTest(const DataSet&, int groupColumn, int valueColumn, bool equalVariances = false, const QVector<int>& rows = {});
+    static IndependentTResult independentTTest(const DataSet&, int groupColumn, int valueColumn, const QString& group1, const QString& group2, bool equalVariances = false, const QVector<int>& rows = {});
+    static QStringList independentGroupLevels(const DataSet&, int groupColumn, const QVector<int>& rows = {});
     static PairedTResult pairedTTest(const DataSet&, int firstColumn, int secondColumn, const QVector<int>& rows = {});
     static ChiSquareResult chiSquare(const DataSet&, int rowColumn, int columnColumn, const QVector<int>& rows = {});
     static AnovaResult oneWayAnova(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});

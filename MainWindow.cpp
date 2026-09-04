@@ -712,11 +712,46 @@ void MainWindow::runOneSampleTTest(){
 }
 
 void MainWindow::runIndependentTTest(){
-    QStringList all,numeric;for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"Independent-Samples t Test","A numeric outcome and a grouping variable are required.");return;}
-    bool ok=false;QString value=QInputDialog::getItem(this,"Independent-Samples t Test","Numeric outcome:",numeric,0,false,&ok);if(!ok)return;QString group=QInputDialog::getItem(this,"Independent-Samples t Test","Grouping variable (exactly 2 groups):",all,0,false,&ok);if(!ok)return;if(value==group){QMessageBox::information(this,"Independent-Samples t Test","The outcome and grouping variables must be different.");return;}
-    QStringList assumptions={"Welch (unequal variances, recommended)","Equal variances assumed"};QString assumption=QInputDialog::getItem(this,"Independent-Samples t Test","Variance assumption:",assumptions,0,false,&ok);if(!ok)return;
-    const auto r=AnalysisEngine::independentTTest(m_data,all.indexOf(group),all.indexOf(value),assumption.startsWith("Equal"));
-    if(r.group1.isEmpty()||r.group2.isEmpty()){showResultMessage("Independent-Samples t Test","Exactly two groups with valid labels are required.");return;}if(r.n1<2||r.n2<2){showResultMessage("Independent-Samples t Test","Each group needs at least 2 valid numeric observations.");return;}
+    QStringList all,numeric;
+    for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}
+    if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"Independent-Samples t Test","A numeric outcome and a grouping variable are required.");return;}
+    bool ok=false;
+    QString value=QInputDialog::getItem(this,"Independent-Samples t Test","Numeric outcome:",numeric,0,false,&ok);
+    if(!ok)return;
+    const int valueColumn=m_data.columnNames().indexOf(value);
+    QStringList groupingNames;
+    QMap<QString, QStringList> groupingLevels;
+    for(const auto&v:m_data.variables()){
+        if(v.name==value) continue;
+        const int c=m_data.columnNames().indexOf(v.name);
+        const QStringList levels=AnalysisEngine::independentGroupLevels(m_data,c);
+        if(levels.size()>=2){ groupingNames<<v.name; groupingLevels.insert(v.name,levels); }
+    }
+    if(groupingNames.isEmpty()){
+        showResultMessage("Independent-Samples t Test","No grouping variable with at least two non-missing groups was found. Select or create a grouping variable with two or more valid groups.");
+        return;
+    }
+    QString group=QInputDialog::getItem(this,"Independent-Samples t Test","Grouping variable:",groupingNames,0,false,&ok);
+    if(!ok)return;
+    const int groupColumn=m_data.columnNames().indexOf(group);
+    const QStringList levels=groupingLevels.value(group);
+    QString group1=QInputDialog::getItem(this,"Independent-Samples t Test","Group 1:",levels,0,false,&ok);
+    if(!ok)return;
+    QStringList remaining=levels; remaining.removeAll(group1);
+    QString group2=QInputDialog::getItem(this,"Independent-Samples t Test","Group 2:",remaining,0,false,&ok);
+    if(!ok)return;
+    QStringList assumptions={"Welch (unequal variances, recommended)","Equal variances assumed"};
+    QString assumption=QInputDialog::getItem(this,"Independent-Samples t Test","Variance assumption:",assumptions,0,false,&ok);
+    if(!ok)return;
+    const auto r=AnalysisEngine::independentTTest(m_data,groupColumn,valueColumn,group1,group2,assumption.startsWith("Equal"));
+    if(r.group1.isEmpty()||r.group2.isEmpty()){
+        const QString detail=r.availableGroups.isEmpty()?"No valid group levels were found.":QString("Found %1 valid groups: %2. Select any two groups for the comparison.").arg(r.availableGroups.size()).arg(r.availableGroups.join(", "));
+        showResultMessage("Independent-Samples t Test",detail);return;
+    }
+    if(r.n1<2||r.n2<2){
+        const QString detail=QString("Each group needs at least 2 valid numeric outcome observations. %1: %2 valid; %3: %4 valid.").arg(r.group1).arg(r.n1).arg(r.group2).arg(r.n2);
+        showResultMessage("Independent-Samples t Test",detail);return;
+    }
     QVector<QStringList> rows={{r.group1,QString::number(r.n1),AnalysisEngine::number(r.mean1),AnalysisEngine::number(r.sd1),r.group2,QString::number(r.n2),AnalysisEngine::number(r.mean2),AnalysisEngine::number(r.sd2),AnalysisEngine::number(r.difference),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),AnalysisEngine::number(r.ciLow),AnalysisEngine::number(r.ciHigh),AnalysisEngine::number(r.cohensD)}};
     const QString summary=QString("%1: %2  |  %3: %4").arg(r.group1,inferentialAccounting(r.group1Accounting),r.group2,inferentialAccounting(r.group2Accounting));
     showResultTable("Independent-Samples t Test — "+value+" by "+group,{"Group 1","N1","Mean 1","SD 1","Group 2","N2","Mean 2","SD 2","Mean difference","t","df","p-value","95% CI low","95% CI high","Cohen's d"},rows,{1,2,3,5,6,7,8,9,10,11,12,13,14},summary,assumption+". Difference is Group 1 − Group 2. Missing/invalid outcomes are accounted for separately within each group.");

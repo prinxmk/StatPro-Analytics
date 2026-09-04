@@ -1,6 +1,7 @@
 #include "AnalysisEngine.h"
 #include <algorithm>
 #include <QMap>
+#include <QSet>
 
 namespace StatPro {
 
@@ -234,12 +235,64 @@ OneSampleTResult AnalysisEngine::oneSampleTTest(const DataSet& data,int column,d
     double target=0.975,l=0,h=20;for(int i=0;i<80;++i){double mid=(l+h)/2; if(studentTCdf(mid,out.df)<target)l=mid;else h=mid;}crit=(l+h)/2;out.ciLow=(out.mean-testMean)-crit*se;out.ciHigh=(out.mean-testMean)+crit*se;out.cohensD=(out.mean-testMean)/out.stdDev;return out;
 }
 
-IndependentTResult AnalysisEngine::independentTTest(const DataSet& data,int groupColumn,int valueColumn,bool equalVariances,const QVector<int>& rows){
-    IndependentTResult out; const auto use=analysisRows(data,rows); QStringList groups; QMap<QString,QVector<double>> vals; QMap<QString,ObservationAccounting> acc;
-    for(int r:use){QString g;const QString gc=classify(data,r,groupColumn);if(gc=="Blank")g="(Blank)";else if(gc=="DeclaredMissing")g="(Declared missing)";else if(gc=="NonNumeric")g="(Invalid group)";else g=data.value(r,groupColumn).toString().trimmed();auto &a=acc[g];++a.observations;const QString vc=classify(data,r,valueColumn);if(gc!="Valid"){accountClass(a,g.startsWith("(")?gc:"Valid");continue;}if(!groups.contains(g))groups<<g;if(vc!="Valid")accountClass(a,vc);else{double v;if(numericValue(data,r,valueColumn,v))a.valid++,vals[g].push_back(v);else a.nonNumeric++;}}
-    if(groups.size()!=2)return out;out.group1=groups[0];out.group2=groups[1];out.group1Accounting=acc[groups[0]];out.group2Accounting=acc[groups[1]];const auto x=vals.value(groups[0]),y=vals.value(groups[1]);out.n1=x.size();out.n2=y.size();if(x.size()<2||y.size()<2)return out;out.mean1=sampleMean(x);out.mean2=sampleMean(y);out.sd1=sampleSd(x);out.sd2=sampleSd(y);out.difference=out.mean1-out.mean2;
-    double se2=0; if(equalVariances){double pooled=((x.size()-1)*out.sd1*out.sd1+(y.size()-1)*out.sd2*out.sd2)/(x.size()+y.size()-2);se2=pooled*(1.0/x.size()+1.0/y.size());out.df=x.size()+y.size()-2;out.cohensD=out.difference/std::sqrt(pooled);}else{se2=out.sd1*out.sd1/x.size()+out.sd2*out.sd2/y.size();const double a=out.sd1*out.sd1/x.size(),b=out.sd2*out.sd2/y.size();out.df=(a+b)*(a+b)/(a*a/(x.size()-1)+b*b/(y.size()-1));out.cohensD=out.difference/std::sqrt(((x.size()-1)*out.sd1*out.sd1+(y.size()-1)*out.sd2*out.sd2)/(x.size()+y.size()-2));}
-    if(se2<=0)return out;const double se=std::sqrt(se2);out.t=out.difference/se;out.p=2.0*(1.0-studentTCdf(std::fabs(out.t),out.df));double l=0,h=20;for(int i=0;i<80;++i){double mid=(l+h)/2;if(studentTCdf(mid,out.df)<0.975)l=mid;else h=mid;}const double crit=(l+h)/2;out.ciLow=out.difference-crit*se;out.ciHigh=out.difference+crit*se;return out;
+QStringList AnalysisEngine::independentGroupLevels(const DataSet& data,int groupColumn,const QVector<int>& rows){
+    const auto use=analysisRows(data,rows);
+    QSet<QString> levels;
+    if(groupColumn<0||groupColumn>=data.columnCount()) return {};
+    for(int r:use){
+        if(classify(data,r,groupColumn)!="Valid") continue;
+        QString text=data.value(r,groupColumn).toString().trimmed();
+        if(data.variables()[groupColumn].type==VariableType::Numeric){
+            bool ok=false; double v=text.toDouble(&ok);
+            if(!ok||!std::isfinite(v)) continue;
+            text=QString::number(v,'g',15);
+        }
+        if(!text.isEmpty()) levels.insert(text);
+    }
+    QStringList out=levels.values();
+    std::sort(out.begin(),out.end(),[](const QString&a,const QString&b){return a.localeAwareCompare(b)<0;});
+    return out;
+}
+
+IndependentTResult AnalysisEngine::independentTTest(const DataSet& data,int groupColumn,int valueColumn,const QString& group1,const QString& group2,bool equalVariances,const QVector<int>& rows){
+    IndependentTResult out; const auto use=analysisRows(data,rows); QMap<QString,QVector<double>> vals; QMap<QString,ObservationAccounting> acc;
+    if(groupColumn<0||groupColumn>=data.columnCount()||valueColumn<0||valueColumn>=data.columnCount()||groupColumn==valueColumn) return out;
+    const QStringList groups=independentGroupLevels(data,groupColumn,rows); out.availableGroups=groups;
+    if(groups.size()<2 || group1.isEmpty() || group2.isEmpty() || group1==group2 || !groups.contains(group1) || !groups.contains(group2)) return out;
+    acc[group1]=ObservationAccounting{}; acc[group2]=ObservationAccounting{};
+    for(int r:use){
+        const QString gc=classify(data,r,groupColumn);
+        QString g;
+        if(gc=="Valid"){
+            g=data.value(r,groupColumn).toString().trimmed();
+            if(data.variables()[groupColumn].type==VariableType::Numeric){bool ok=false;double v=g.toDouble(&ok);if(ok&&std::isfinite(v))g=QString::number(v,'g',15);else g.clear();}
+        }
+        if(g.isEmpty()||!acc.contains(g)) continue;
+        auto &a=acc[g]; ++a.observations;
+        const QString vc=classify(data,r,valueColumn);
+        if(vc!="Valid"){accountClass(a,vc);continue;}
+        double v;
+        if(numericValue(data,r,valueColumn,v)){++a.valid;vals[g].push_back(v);}else ++a.nonNumeric;
+    }
+    out.group1=group1;out.group2=group2;out.group1Accounting=acc[group1];out.group2Accounting=acc[group2];
+    const auto x=vals.value(group1),y=vals.value(group2); out.n1=x.size();out.n2=y.size();
+    if(x.size()<2||y.size()<2)return out;
+    out.mean1=sampleMean(x);out.mean2=sampleMean(y);out.sd1=sampleSd(x);out.sd2=sampleSd(y);out.difference=out.mean1-out.mean2;
+    double se2=0;
+    if(equalVariances){
+        const double pooled=((x.size()-1)*out.sd1*out.sd1+(y.size()-1)*out.sd2*out.sd2)/(x.size()+y.size()-2);
+        se2=pooled*(1.0/x.size()+1.0/y.size()); out.df=x.size()+y.size()-2; out.cohensD=pooled>0?out.difference/std::sqrt(pooled):NAN;
+    }else{
+        se2=out.sd1*out.sd1/x.size()+out.sd2*out.sd2/y.size();
+        const double a=out.sd1*out.sd1/x.size(),b=out.sd2*out.sd2/y.size();
+        out.df=(a+b)*(a+b)/(a*a/(x.size()-1)+b*b/(y.size()-1));
+        const double pooled=((x.size()-1)*out.sd1*out.sd1+(y.size()-1)*out.sd2*out.sd2)/(x.size()+y.size()-2);
+        out.cohensD=pooled>0?out.difference/std::sqrt(pooled):NAN;
+    }
+    if(se2<=0||!std::isfinite(out.df)||out.df<=0)return out;
+    const double se=std::sqrt(se2);out.t=out.difference/se;out.p=2.0*(1.0-studentTCdf(std::fabs(out.t),out.df));
+    double l=0,h=20;for(int i=0;i<80;++i){double mid=(l+h)/2;if(studentTCdf(mid,out.df)<0.975)l=mid;else h=mid;}
+    const double crit=(l+h)/2;out.ciLow=out.difference-crit*se;out.ciHigh=out.difference+crit*se;return out;
 }
 
 PairedTResult AnalysisEngine::pairedTTest(const DataSet& data,int firstColumn,int secondColumn,const QVector<int>& rows){
