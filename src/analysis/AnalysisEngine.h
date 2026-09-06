@@ -38,6 +38,19 @@ struct RegressionResult {
     double msRegression{NAN}, msResidual{NAN}, f{NAN}, fP{NAN}, dfRegression{NAN}, dfResidual{NAN}, rmse{NAN}, durbinWatson{NAN};
 };
 
+struct MultipleRegressionCoefficient {
+    QString term;
+    double estimate{NAN}, stdError{NAN}, standardizedBeta{NAN}, t{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, vif{NAN};
+};
+struct MultipleRegressionResult {
+    int observations{0}, complete{0}, excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
+    int predictors{0};
+    bool singular{false};
+    double rSquared{NAN}, adjustedRSquared{NAN}, ssRegression{NAN}, ssResidual{NAN}, ssTotal{NAN};
+    double msRegression{NAN}, msResidual{NAN}, f{NAN}, fP{NAN}, dfRegression{NAN}, dfResidual{NAN}, rmse{NAN}, durbinWatson{NAN};
+    QVector<MultipleRegressionCoefficient> coefficients;
+};
+
 class AnalysisEngine {
 public:
     static QVector<DescriptiveRow> descriptive(const DataSet&, const QVector<int>& columns, const QVector<int>& rows = {});
@@ -53,6 +66,7 @@ public:
     static ChiSquareResult chiSquare(const DataSet&, int rowColumn, int columnColumn, const QVector<int>& rows = {});
     static AnovaResult oneWayAnova(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});
     static RegressionResult simpleLinearRegression(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
+    static MultipleRegressionResult multipleLinearRegression(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
 
     static QString number(double value);
 

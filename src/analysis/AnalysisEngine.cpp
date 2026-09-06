@@ -378,5 +378,155 @@ RegressionResult AnalysisEngine::simpleLinearRegression(const DataSet& data,int 
     return out;
 }
 
+
+
+static bool invertSquareMatrix(const QVector<QVector<double>>& input, QVector<QVector<double>>& inverse) {
+    const int n=input.size();
+    if(n==0) return false;
+    for(const auto& row:input) if(row.size()!=n) return false;
+    QVector<QVector<double>> a(n,QVector<double>(2*n,0.0));
+    for(int i=0;i<n;++i){
+        for(int j=0;j<n;++j) a[i][j]=input[i][j];
+        a[i][n+i]=1.0;
+    }
+    for(int col=0;col<n;++col){
+        int pivot=col;
+        double best=std::fabs(a[col][col]);
+        for(int r=col+1;r<n;++r){const double v=std::fabs(a[r][col]);if(v>best){best=v;pivot=r;}}
+        if(best<1e-12) return false;
+        if(pivot!=col) std::swap(a[pivot],a[col]);
+        const double d=a[col][col];
+        for(int j=0;j<2*n;++j) a[col][j]/=d;
+        for(int r=0;r<n;++r){
+            if(r==col) continue;
+            const double f=a[r][col];
+            if(std::fabs(f)<1e-18) continue;
+            for(int j=0;j<2*n;++j) a[r][j]-=f*a[col][j];
+        }
+    }
+    inverse=QVector<QVector<double>>(n,QVector<double>(n,0.0));
+    for(int i=0;i<n;++i) for(int j=0;j<n;++j) inverse[i][j]=a[i][n+j];
+    return true;
+}
+
+static double auxiliaryR2(const QVector<QVector<double>>& x, int targetColumn) {
+    const int n=x.size();
+    if(n<3 || targetColumn<0 || x.isEmpty() || targetColumn>=x[0].size()) return NAN;
+    const int k=x[0].size();
+    if(k<=1) return 0.0;
+    const int q=k; // intercept + (k-1) other predictors
+    QVector<QVector<double>> xtx(q,QVector<double>(q,0.0));
+    QVector<double> xty(q,0.0), y(n,0.0);
+    double mean=0.0;
+    for(int i=0;i<n;++i){y[i]=x[i][targetColumn];mean+=y[i];}
+    mean/=n;
+    for(int i=0;i<n;++i){
+        QVector<double> row; row.reserve(q); row.push_back(1.0);
+        for(int j=0;j<k;++j) if(j!=targetColumn) row.push_back(x[i][j]);
+        for(int a=0;a<q;++a){
+            xty[a]+=row[a]*y[i];
+            for(int b=0;b<q;++b) xtx[a][b]+=row[a]*row[b];
+        }
+    }
+    QVector<QVector<double>> inv;
+    if(!invertSquareMatrix(xtx,inv)) return NAN;
+    QVector<double> beta(q,0.0);
+    for(int a=0;a<q;++a) for(int b=0;b<q;++b) beta[a]+=inv[a][b]*xty[b];
+    double sst=0.0,sse=0.0;
+    for(int i=0;i<n;++i){
+        double fitted=beta[0]; int pos=1;
+        for(int j=0;j<k;++j) if(j!=targetColumn) fitted+=beta[pos++]*x[i][j];
+        sst+=std::pow(y[i]-mean,2); sse+=std::pow(y[i]-fitted,2);
+    }
+    if(sst<=0) return NAN;
+    return std::max(0.0,std::min(1.0,1.0-sse/sst));
+}
+
+MultipleRegressionResult AnalysisEngine::multipleLinearRegression(const DataSet& data,const QVector<int>& predictorColumns,int yColumn,const QVector<int>& rows){
+    MultipleRegressionResult out;
+    const auto use=analysisRows(data,rows); out.observations=use.size(); out.predictors=predictorColumns.size();
+    if(predictorColumns.isEmpty() || yColumn<0 || yColumn>=data.columnCount()) return out;
+    QSet<int> uniquePredictors;
+    for(int c:predictorColumns){
+        if(c<0 || c>=data.columnCount() || c==yColumn || data.variables()[c].type!=VariableType::Numeric) return out;
+        uniquePredictors.insert(c);
+    }
+    if(uniquePredictors.size()!=predictorColumns.size()) return out;
+
+    QVector<QVector<double>> x;
+    QVector<double> y;
+    x.reserve(use.size()); y.reserve(use.size());
+    for(int r:use){
+        bool hasBlank=false,hasDeclared=false,hasInvalid=false;
+        const QString yc=classify(data,r,yColumn);
+        if(yc=="Blank") hasBlank=true; else if(yc=="DeclaredMissing") hasDeclared=true; else if(yc!="Valid") hasInvalid=true;
+        QVector<double> rowX; rowX.reserve(predictorColumns.size());
+        for(int c:predictorColumns){
+            const QString cls=classify(data,r,c);
+            if(cls=="Blank") hasBlank=true; else if(cls=="DeclaredMissing") hasDeclared=true; else if(cls!="Valid") hasInvalid=true;
+            double v=NAN; if(cls=="Valid" && numericValue(data,r,c,v)) rowX.push_back(v); else rowX.push_back(NAN);
+        }
+        double vy=NAN; const bool yOk=(yc=="Valid" && numericValue(data,r,yColumn,vy));
+        bool xOk=true; for(double v:rowX) if(!std::isfinite(v)){xOk=false;break;}
+        if(yOk && xOk){x.push_back(rowX);y.push_back(vy);}
+        else if(hasBlank) ++out.excludedBlank;
+        else if(hasDeclared) ++out.excludedDeclaredMissing;
+        else ++out.excludedNonNumeric;
+    }
+    out.complete=y.size();
+    const int n=out.complete, k=predictorColumns.size(), p=k+1;
+    out.dfRegression=k; out.dfResidual=n-p;
+    if(n<=p) return out;
+
+    QVector<QVector<double>> xtx(p,QVector<double>(p,0.0));
+    QVector<double> xty(p,0.0);
+    for(int i=0;i<n;++i){
+        QVector<double> row; row.reserve(p); row.push_back(1.0); for(double v:x[i]) row.push_back(v);
+        for(int a=0;a<p;++a){
+            xty[a]+=row[a]*y[i];
+            for(int b=0;b<p;++b) xtx[a][b]+=row[a]*row[b];
+        }
+    }
+    QVector<QVector<double>> inv;
+    if(!invertSquareMatrix(xtx,inv)){out.singular=true;return out;}
+    QVector<double> beta(p,0.0);
+    for(int a=0;a<p;++a) for(int b=0;b<p;++b) beta[a]+=inv[a][b]*xty[b];
+
+    double yMean=0.0; for(double v:y)yMean+=v; yMean/=n;
+    QVector<double> residuals; residuals.reserve(n);
+    out.ssTotal=0.0; out.ssResidual=0.0;
+    for(int i=0;i<n;++i){
+        double fitted=beta[0]; for(int j=0;j<k;++j) fitted+=beta[j+1]*x[i][j];
+        const double e=y[i]-fitted; residuals.push_back(e);
+        out.ssResidual+=e*e; out.ssTotal+=std::pow(y[i]-yMean,2);
+    }
+    out.ssRegression=std::max(0.0,out.ssTotal-out.ssResidual);
+    out.rSquared=out.ssTotal>0?std::max(0.0,std::min(1.0,1.0-out.ssResidual/out.ssTotal)):NAN;
+    out.adjustedRSquared=std::isfinite(out.rSquared)?1.0-(1.0-out.rSquared)*(n-1.0)/out.dfResidual:NAN;
+    out.msRegression=out.ssRegression/k; out.msResidual=out.ssResidual/out.dfResidual; out.rmse=std::sqrt(std::max(0.0,out.msResidual));
+    if(out.msResidual>0){out.f=out.msRegression/out.msResidual;out.fP=fSurvival(out.f,k,out.dfResidual);}else{out.f=INFINITY;out.fP=0.0;}
+    if(out.ssResidual>0){double num=0.0;for(int i=1;i<residuals.size();++i)num+=std::pow(residuals[i]-residuals[i-1],2);out.durbinWatson=num/out.ssResidual;}
+
+    double ySS=0.0; for(double v:y)ySS+=std::pow(v-yMean,2); const double ySd=n>1?std::sqrt(ySS/(n-1)):NAN;
+    QVector<double> xSd(k,NAN);
+    for(int j=0;j<k;++j){double m=0.0;for(const auto& row:x)m+=row[j];m/=n;double ss=0.0;for(const auto& row:x)ss+=std::pow(row[j]-m,2);if(n>1)xSd[j]=std::sqrt(ss/(n-1));}
+    const double crit=studentTQuantile(0.975,out.dfResidual);
+    for(int a=0;a<p;++a){
+        MultipleRegressionCoefficient c;
+        c.term=(a==0)?"Intercept":data.variables()[predictorColumns[a-1]].name;
+        c.estimate=beta[a];
+        c.stdError=std::sqrt(std::max(0.0,out.msResidual*inv[a][a]));
+        if(c.stdError>0){c.t=c.estimate/c.stdError;c.p=2.0*(1.0-studentTCdf(std::fabs(c.t),out.dfResidual));c.ciLow=c.estimate-crit*c.stdError;c.ciHigh=c.estimate+crit*c.stdError;}
+        else {c.t=c.estimate==0?0:std::copysign(INFINITY,c.estimate);c.p=c.estimate==0?1.0:0.0;c.ciLow=c.estimate;c.ciHigh=c.estimate;}
+        if(a>0){
+            c.standardizedBeta=(std::isfinite(ySd)&&ySd>0)?c.estimate*xSd[a-1]/ySd:NAN;
+            const double aux=auxiliaryR2(x,a-1);
+            c.vif=std::isfinite(aux)&&aux<1.0?1.0/(1.0-aux):(aux>=1.0?INFINITY:NAN);
+        }
+        out.coefficients.push_back(c);
+    }
+    return out;
+}
+
 QString AnalysisEngine::number(double value) { return std::isfinite(value) ? QString::number(value,'f',4) : "—"; }
 }

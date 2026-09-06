@@ -231,6 +231,7 @@ void MainWindow::buildMenus(){
     addAction(testsMenu,"One-Way ANOVA…",[this]{runOneWayAnova();});
     auto* regressionMenu=analysisMenu->addMenu("Regression");
     addAction(regressionMenu,"Simple Linear Regression…",[this]{runSimpleLinearRegression();});
+    addAction(regressionMenu,"Multiple Linear Regression…",[this]{runMultipleLinearRegression();});
     for(const auto& group : QStringList{
             "Data","Cleaning","Transform",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
@@ -816,6 +817,70 @@ void MainWindow::runSimpleLinearRegression(){
         .arg(r.observations).arg(r.complete).arg(r.xBlank).arg(r.yBlank).arg(r.xDeclaredMissing).arg(r.yDeclaredMissing).arg(r.xNonNumeric).arg(r.yNonNumeric);
     showResultTable("Simple Linear Regression — "+y+" on "+x,{"Term","Estimate","Std. Error","t","p-value","95% CI low","95% CI high"},table,{1,2,3,4,5,6},note,summary);
     m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Simple linear regression completed",5000);
+}
+
+
+void MainWindow::runMultipleLinearRegression(){
+    QStringList numeric;
+    for(const auto& v:m_data.variables()) if(v.type==VariableType::Numeric) numeric<<v.name;
+    if(numeric.size()<2){QMessageBox::information(this,"Multiple Linear Regression","At least two numeric variables are required.");return;}
+
+    QDialog dialog(this); dialog.setWindowTitle("Multiple Linear Regression"); dialog.resize(520,500);
+    auto* layout=new QVBoxLayout(&dialog);
+    auto* form=new QFormLayout;
+    auto* outcome=new QComboBox; outcome->addItems(numeric);
+    form->addRow("Outcome variable (Y):",outcome);
+    layout->addLayout(form);
+    layout->addWidget(new QLabel("Predictors (select one or more):"));
+    auto* predictors=new QListWidget;
+    predictors->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    predictors->addItems(numeric);
+    layout->addWidget(predictors,1);
+    auto* hint=new QLabel("Tip: hold Ctrl to select multiple predictors. The outcome variable cannot also be a predictor.");
+    hint->setWordWrap(true); layout->addWidget(hint);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);
+    layout->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(dialog.exec()!=QDialog::Accepted)return;
+
+    const QString yName=outcome->currentText();
+    QStringList predictorNames;
+    for(auto* item:predictors->selectedItems()) predictorNames<<item->text();
+    predictorNames.removeAll(yName);
+    predictorNames.removeDuplicates();
+    if(predictorNames.isEmpty()){QMessageBox::information(this,"Multiple Linear Regression","Select at least one predictor different from the outcome variable.");return;}
+
+    const int yColumn=m_data.columnNames().indexOf(yName);
+    QVector<int> predictorColumns;
+    for(const QString& name:predictorNames){const int c=m_data.columnNames().indexOf(name);if(c>=0)predictorColumns.push_back(c);}
+    if(yColumn<0 || predictorColumns.size()!=predictorNames.size()){showResultMessage("Multiple Linear Regression","One or more selected variables could not be found in the dataset.");return;}
+
+    const auto r=AnalysisEngine::multipleLinearRegression(m_data,predictorColumns,yColumn);
+    if(r.complete<=r.predictors+1){
+        showResultMessage("Multiple Linear Regression",QString("Insufficient complete observations. This model has %1 predictor(s) and requires more than %2 complete numeric observations; only %3 are available.").arg(r.predictors).arg(r.predictors+1).arg(r.complete));
+        return;
+    }
+    if(r.singular){
+        showResultMessage("Multiple Linear Regression","The model cannot be estimated because the predictors are perfectly collinear or otherwise form a singular design matrix. Remove a redundant predictor and try again.");
+        return;
+    }
+    if(r.coefficients.isEmpty()){showResultMessage("Multiple Linear Regression","The model could not be estimated from the selected variables.");return;}
+
+    QVector<QStringList> table;
+    for(const auto& c:r.coefficients){
+        table.push_back({c.term,AnalysisEngine::number(c.estimate),AnalysisEngine::number(c.stdError),AnalysisEngine::number(c.standardizedBeta),AnalysisEngine::number(c.t),AnalysisEngine::number(c.p),AnalysisEngine::number(c.ciLow),AnalysisEngine::number(c.ciHigh),AnalysisEngine::number(c.vif)});
+    }
+    const QString summary=QString("Complete N: %1  |  Predictors: %2  |  R²: %3  |  Adjusted R²: %4  |  RMSE: %5  |  F(%6,%7): %8  |  Model p-value: %9  |  Durbin–Watson: %10")
+        .arg(r.complete).arg(r.predictors).arg(AnalysisEngine::number(r.rSquared)).arg(AnalysisEngine::number(r.adjustedRSquared)).arg(AnalysisEngine::number(r.rmse))
+        .arg(static_cast<int>(r.dfRegression)).arg(static_cast<int>(r.dfResidual)).arg(AnalysisEngine::number(r.f)).arg(AnalysisEngine::number(r.fP)).arg(AnalysisEngine::number(r.durbinWatson));
+    QString equation=yName+" = "+AnalysisEngine::number(r.coefficients[0].estimate);
+    for(int i=1;i<r.coefficients.size();++i) equation+=QString(" + (%1 × %2)").arg(AnalysisEngine::number(r.coefficients[i].estimate),r.coefficients[i].term);
+    const QString note=QString("Model: %1. Observation accounting — total: %2; complete cases used: %3; excluded due to blank values: %4; excluded due to declared missing values: %5; excluded due to non-numeric/invalid values: %6. Standardized beta is reported for predictors. VIF is a multicollinearity diagnostic; values above about 5 merit attention and values above 10 are commonly treated as serious.")
+        .arg(equation).arg(r.observations).arg(r.complete).arg(r.excludedBlank).arg(r.excludedDeclaredMissing).arg(r.excludedNonNumeric);
+    showResultTable("Multiple Linear Regression — "+yName,{"Term","Estimate","Std. Error","Std. Beta","t","p-value","95% CI low","95% CI high","VIF"},table,{1,2,3,4,5,6,7,8},note,summary);
+    m_tabs->setCurrentWidget(m_output->parentWidget());
+    statusBar()->showMessage("Multiple linear regression completed",5000);
 }
 
 void MainWindow::undo(){m_undoStack->undo();m_state.setDirty(true);refreshDataView();}

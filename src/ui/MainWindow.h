@@ -64,6 +64,7 @@ private slots:
     void runChiSquare();
     void runOneWayAnova();
     void runSimpleLinearRegression();
+    void runMultipleLinearRegression();
     void formatResultsTables();
     void undo();
     void redo();
