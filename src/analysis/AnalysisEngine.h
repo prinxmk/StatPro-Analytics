@@ -85,6 +85,7 @@ public:
     static AnovaResult oneWayAnova(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});
     static RegressionResult simpleLinearRegression(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static MultipleRegressionResult multipleLinearRegression(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
+    static MultipleRegressionResult regressionWithCategoricalPredictors(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
     static RegressionDiagnosticsResult regressionDiagnostics(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
 
     static QString number(double value);

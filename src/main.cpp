@@ -7,7 +7,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName("StatPro Analytics");
     QApplication::setApplicationDisplayName("StatPro Analytics");
-    QApplication::setApplicationVersion("0.8.0");
+    QApplication::setApplicationVersion("0.9.0");
     QApplication::setOrganizationName("StatPro");
     app.setStyle(QStyleFactory::create("Fusion"));
     StatPro::MainWindow window;

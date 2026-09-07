@@ -65,6 +65,7 @@ private slots:
     void runOneWayAnova();
     void runSimpleLinearRegression();
     void runMultipleLinearRegression();
+    void runRegressionWithCategoricalPredictors();
     void runRegressionDiagnostics();
     void formatResultsTables();
     void undo();

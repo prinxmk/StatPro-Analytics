@@ -232,6 +232,7 @@ void MainWindow::buildMenus(){
     auto* regressionMenu=analysisMenu->addMenu("Regression");
     addAction(regressionMenu,"Simple Linear Regression…",[this]{runSimpleLinearRegression();});
     addAction(regressionMenu,"Multiple Linear Regression…",[this]{runMultipleLinearRegression();});
+    addAction(regressionMenu,"Multiple Linear Regression with Categorical Predictors…",[this]{runRegressionWithCategoricalPredictors();});
     for(const auto& group : QStringList{
             "Data","Cleaning","Transform",
             "Time Series","Econometrics","Survival","Survey","Multivariate",
@@ -937,6 +938,72 @@ void MainWindow::showResultTable(const QString& title, const QStringList& header
     m_output->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
     applyResultsFormatting();
 }
+
+void MainWindow::runRegressionWithCategoricalPredictors(){
+    QStringList outcomes;
+    QStringList predictors;
+    for(const auto& v:m_data.variables()){
+        if(v.type==VariableType::Numeric) outcomes<<v.name;
+        if(v.type==VariableType::Numeric || v.type==VariableType::String || v.type==VariableType::Boolean) predictors<<v.name;
+    }
+    if(outcomes.isEmpty() || predictors.size()<2){
+        QMessageBox::information(this,"Multiple Linear Regression with Categorical Predictors","A numeric outcome and at least one predictor are required.");
+        return;
+    }
+    QDialog dialog(this); dialog.setWindowTitle("Multiple Linear Regression with Categorical Predictors"); dialog.resize(620,560);
+    auto* layout=new QVBoxLayout(&dialog);
+    auto* form=new QFormLayout; auto* outcome=new QComboBox; outcome->addItems(outcomes);
+    form->addRow("Numeric outcome (Y):",outcome); layout->addLayout(form);
+    layout->addWidget(new QLabel("Predictors (numeric = continuous; text/Boolean = categorical):"));
+    auto* list=new QListWidget; list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    for(const auto& name:predictors){
+        const int c=m_data.columnNames().indexOf(name); const auto type=m_data.variables()[c].type;
+        auto* item=new QListWidgetItem(name+"  ["+variableTypeName(type)+"]"); item->setData(Qt::UserRole,name); list->addItem(item);
+    }
+    layout->addWidget(list,1);
+    auto* hint=new QLabel("Categorical predictors use reference-cell (dummy) coding. The first sorted valid level is the reference; each other level is compared with it. Numeric predictors remain continuous.");
+    hint->setWordWrap(true); layout->addWidget(hint);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); layout->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(dialog.exec()!=QDialog::Accepted)return;
+    const QString yName=outcome->currentText();
+    QStringList predictorNames;
+    for(auto* item:list->selectedItems()) predictorNames<<item->data(Qt::UserRole).toString();
+    predictorNames.removeAll(yName); predictorNames.removeDuplicates();
+    if(predictorNames.isEmpty()){
+        QMessageBox::information(this,"Multiple Linear Regression with Categorical Predictors","Select at least one predictor different from the outcome variable.");
+        return;
+    }
+    const int yColumn=m_data.columnNames().indexOf(yName); QVector<int> predictorColumns;
+    for(const QString& name:predictorNames){const int c=m_data.columnNames().indexOf(name);if(c>=0)predictorColumns.push_back(c);}
+    if(yColumn<0 || predictorColumns.size()!=predictorNames.size()){
+        showResultMessage("Categorical Regression","One or more selected variables could not be found in the dataset."); return;
+    }
+    const auto r=AnalysisEngine::regressionWithCategoricalPredictors(m_data,predictorColumns,yColumn);
+    if(r.coefficients.isEmpty()){
+        showResultMessage("Categorical Regression","The model could not be estimated. Check that the selected predictors have variation and that enough complete observations are available."); return;
+    }
+    if(r.singular){
+        showResultMessage("Categorical Regression","The model cannot be estimated because the design matrix is singular. This can happen when a predictor has no variation, when predictors are redundant, or when there are too few complete observations. Remove a redundant predictor or combine sparse categories and try again."); return;
+    }
+    const int modelParameters=r.coefficients.size();
+    if(r.complete<=modelParameters){
+        showResultMessage("Categorical Regression",QString("Insufficient complete observations. The expanded model has %1 parameter(s) and only %2 complete observations. More complete observations are required.").arg(modelParameters).arg(r.complete)); return;
+    }
+    QVector<QStringList> table; table.reserve(r.coefficients.size());
+    for(const auto& c:r.coefficients){
+        table.push_back({c.term,AnalysisEngine::number(c.estimate),AnalysisEngine::number(c.stdError),AnalysisEngine::number(c.standardizedBeta),AnalysisEngine::number(c.t),AnalysisEngine::number(c.p),AnalysisEngine::number(c.ciLow),AnalysisEngine::number(c.ciHigh),AnalysisEngine::number(c.vif)});
+    }
+    const QString summary=QString("Complete N: %1  |  Original predictors: %2  |  Model parameters: %3  |  R²: %4  |  Adjusted R²: %5  |  RMSE: %6  |  F(%7,%8): %9  |  Model p-value: %10  |  Durbin–Watson: %11")
+        .arg(r.complete).arg(r.predictors).arg(r.coefficients.size()).arg(AnalysisEngine::number(r.rSquared)).arg(AnalysisEngine::number(r.adjustedRSquared)).arg(AnalysisEngine::number(r.rmse))
+        .arg(static_cast<int>(r.dfRegression)).arg(static_cast<int>(r.dfResidual)).arg(AnalysisEngine::number(r.f)).arg(AnalysisEngine::number(r.fP)).arg(AnalysisEngine::number(r.durbinWatson));
+    const QString note=QString("Categorical predictors use reference-cell coding. For each categorical predictor, the first sorted valid level is the reference and each displayed level coefficient is the adjusted difference from that reference, holding other predictors constant. Numeric predictors are treated as continuous. Complete-case accounting — total observations: %1; complete: %2; excluded because of blank values: %3; declared missing: %4; non-numeric/invalid: %5.")
+        .arg(r.observations).arg(r.complete).arg(r.excludedBlank).arg(r.excludedDeclaredMissing).arg(r.excludedNonNumeric);
+    showResultTable("Multiple Linear Regression with Categorical Predictors — "+yName,{"Term","Estimate","Std. Error","Std. Beta","t","p-value","95% CI low","95% CI high","VIF"},table,{1,2,3,4,5,6,7,8},note,summary);
+    m_tabs->setCurrentWidget(m_output->parentWidget()); statusBar()->showMessage("Categorical regression completed",5000);
+}
+
 
 void MainWindow::runRegressionDiagnostics(){
     QStringList numeric;

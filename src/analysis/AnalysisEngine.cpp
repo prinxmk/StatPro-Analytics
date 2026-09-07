@@ -530,6 +530,81 @@ MultipleRegressionResult AnalysisEngine::multipleLinearRegression(const DataSet&
 
 
 
+MultipleRegressionResult AnalysisEngine::regressionWithCategoricalPredictors(const DataSet& data,const QVector<int>& predictorColumns,int yColumn,const QVector<int>& rows){
+    MultipleRegressionResult out;
+    const auto use=analysisRows(data,rows); out.observations=use.size(); out.predictors=predictorColumns.size();
+    if(predictorColumns.isEmpty() || yColumn<0 || yColumn>=data.columnCount()) return out;
+    QSet<int> uniquePredictors;
+    for(int c:predictorColumns){
+        if(c<0 || c>=data.columnCount() || c==yColumn) return out;
+        if(data.variables()[c].type!=VariableType::Numeric && data.variables()[c].type!=VariableType::String && data.variables()[c].type!=VariableType::Boolean) return out;
+        uniquePredictors.insert(c);
+    }
+    if(uniquePredictors.size()!=predictorColumns.size() || data.variables()[yColumn].type!=VariableType::Numeric) return out;
+
+    struct ExpandedTerm { QString label; int sourceColumn{-1}; QString level; QString reference; };
+    QVector<ExpandedTerm> terms;
+    for(int c:predictorColumns){
+        const auto type=data.variables()[c].type;
+        if(type==VariableType::Numeric){ terms.push_back({data.variables()[c].name,c,QString(),QString()}); continue; }
+        QSet<QString> levelSet;
+        for(int r:use){
+            const QString cls=classify(data,r,c);
+            if(cls=="Valid") levelSet.insert(data.value(r,c).toString().trimmed());
+        }
+        QStringList levels=levelSet.values(); std::sort(levels.begin(),levels.end(),[](const QString&a,const QString&b){return QString::localeAwareCompare(a,b)<0;});
+        if(levels.size()<2) return out;
+        const QString ref=levels.first();
+        for(int i=1;i<levels.size();++i) terms.push_back({data.variables()[c].name+" ["+levels[i]+" vs "+ref+"]",c,levels[i],ref});
+    }
+    if(terms.isEmpty()) return out;
+
+    QVector<QVector<double>> x; QVector<double> y; int excludedBlank=0,excludedDeclared=0,excludedInvalid=0;
+    for(int r:use){
+        bool hasBlank=false,hasDeclared=false,hasInvalid=false;
+        const QString yc=classify(data,r,yColumn);
+        if(yc=="Blank") hasBlank=true; else if(yc=="DeclaredMissing") hasDeclared=true; else if(yc!="Valid") hasInvalid=true;
+        QVector<double> row; row.reserve(terms.size()); bool okRow=(yc=="Valid"); double vy=NAN;
+        if(okRow) okRow=numericValue(data,r,yColumn,vy);
+        for(const auto& term:terms){
+            const QString cls=classify(data,r,term.sourceColumn);
+            if(cls=="Blank") hasBlank=true; else if(cls=="DeclaredMissing") hasDeclared=true; else if(cls!="Valid") hasInvalid=true;
+            if(cls!="Valid"){row.push_back(NAN);okRow=false;continue;}
+            if(data.variables()[term.sourceColumn].type==VariableType::Numeric){double v=NAN;if(!numericValue(data,r,term.sourceColumn,v)){okRow=false;row.push_back(NAN);}else row.push_back(v);}
+            else {const QString level=data.value(r,term.sourceColumn).toString().trimmed(); row.push_back(level==term.level?1.0:0.0);}
+        }
+        if(okRow){x.push_back(row);y.push_back(vy);} else if(hasBlank) ++excludedBlank; else if(hasDeclared) ++excludedDeclared; else ++excludedInvalid;
+    }
+    out.complete=y.size(); out.excludedBlank=excludedBlank; out.excludedDeclaredMissing=excludedDeclared; out.excludedNonNumeric=excludedInvalid;
+    const int n=out.complete, k=terms.size(), p=k+1;
+    if(n<=p) return out;
+
+    QVector<QVector<double>> xtx(p,QVector<double>(p,0.0)); QVector<double> xty(p,0.0); QVector<QVector<double>> design; design.reserve(n);
+    for(int i=0;i<n;++i){
+        QVector<double> row; row.reserve(p); row.push_back(1.0); for(double v:x[i]) row.push_back(v); design.push_back(row);
+        for(int a=0;a<p;++a){xty[a]+=row[a]*y[i];for(int b=0;b<p;++b)xtx[a][b]+=row[a]*row[b];}
+    }
+    QVector<QVector<double>> inv; if(!invertSquareMatrix(xtx,inv)){out.singular=true;return out;}
+    QVector<double> beta(p,0.0); for(int a=0;a<p;++a)for(int b=0;b<p;++b)beta[a]+=inv[a][b]*xty[b];
+    double yMean=0.0;for(double v:y)yMean+=v;yMean/=n;
+    double sst=0.0,sse=0.0,dwNumerator=0.0; QVector<double> residuals(n,0.0); QVector<double> ySdTerm(terms.size(),NAN);
+    for(int j=0;j<k;++j){double mean=0;for(int i=0;i<n;++i)mean+=x[i][j];mean/=n;double ss=0;for(int i=0;i<n;++i)ss+=std::pow(x[i][j]-mean,2);if(n>1)ySdTerm[j]=std::sqrt(ss/(n-1));}
+    for(int i=0;i<n;++i){double fit=0;for(int a=0;a<p;++a)fit+=design[i][a]*beta[a];residuals[i]=y[i]-fit;sse+=residuals[i]*residuals[i];sst+=std::pow(y[i]-yMean,2);if(i>0)dwNumerator+=std::pow(residuals[i]-residuals[i-1],2);}
+    out.ssTotal=sst; out.ssResidual=sse; out.ssRegression=std::max(0.0,sst-sse); out.dfRegression=k; out.dfResidual=n-p;
+    if(out.dfResidual<=0)return out; out.msResidual=sse/out.dfResidual; out.msRegression=k>0?out.ssRegression/k:NAN; out.rmse=std::sqrt(std::max(0.0,out.msResidual));
+    out.rSquared=sst>0?std::max(0.0,std::min(1.0,1.0-sse/sst)):NAN; out.adjustedRSquared=std::isfinite(out.rSquared)?1.0-(1.0-out.rSquared)*(n-1.0)/(n-p):NAN;
+    out.f=(out.msResidual>0&&std::isfinite(out.msRegression))?out.msRegression/out.msResidual:NAN; out.fP=std::isfinite(out.f)?fSurvival(out.f,out.dfRegression,out.dfResidual):NAN; out.durbinWatson=sse>0?dwNumerator/sse:NAN;
+    const double crit=studentTQuantile(0.975,out.dfResidual);
+    for(int a=0;a<p;++a){
+        MultipleRegressionCoefficient c; c.term=(a==0)?"Intercept":terms[a-1].label; c.estimate=beta[a]; c.stdError=std::sqrt(std::max(0.0,out.msResidual*inv[a][a]));
+        if(c.stdError>0){c.t=c.estimate/c.stdError;c.p=2.0*(1.0-studentTCdf(std::fabs(c.t),out.dfResidual));c.ciLow=c.estimate-crit*c.stdError;c.ciHigh=c.estimate+crit*c.stdError;}else{c.t=c.estimate==0?0:std::copysign(INFINITY,c.estimate);c.p=c.estimate==0?1.0:0.0;c.ciLow=c.estimate;c.ciHigh=c.estimate;}
+        if(a>0){c.standardizedBeta=(std::isfinite(ySdTerm[a-1])&&ySdTerm[a-1]>0&&n>1&&sst>0)?c.estimate*ySdTerm[a-1]/std::sqrt(sst/(n-1)):NAN;const double aux=auxiliaryR2(x,a-1);c.vif=std::isfinite(aux)&&aux<1.0?1.0/(1.0-aux):(aux>=1.0?INFINITY:NAN);}
+        out.coefficients.push_back(c);
+    }
+    return out;
+}
+
+
 RegressionDiagnosticsResult AnalysisEngine::regressionDiagnostics(const DataSet& data,const QVector<int>& predictorColumns,int yColumn,const QVector<int>& rows){
     RegressionDiagnosticsResult out;
     const auto use=analysisRows(data,rows);
