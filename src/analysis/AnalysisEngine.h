@@ -63,7 +63,7 @@ struct RegressionPredictionRow {
     double meanCiLow{NAN}, meanCiHigh{NAN}, predictionLow{NAN}, predictionHigh{NAN};
 };
 struct RegressionPredictionResult {
-    int observations{0}, complete{0}; double intercept{NAN}, slope{NAN}, rmse{NAN}, meanX{NAN}, sxx{NAN};
+    int observations{0}, complete{0}; int movingWindow{3}; double intercept{NAN}, slope{NAN}, rmse{NAN}, meanX{NAN}, sxx{NAN};
     double rSquared{NAN}, dfResidual{NAN}; QVector<RegressionPredictionRow> rows;
 };
 
