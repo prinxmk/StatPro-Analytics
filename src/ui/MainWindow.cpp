@@ -237,12 +237,16 @@ void MainWindow::buildMenus(){
             "Time Series","Econometrics","Survival","Survey","Multivariate",
             "Machine Learning","Graphs","Diagnostics","Interpret","Reports"}) {
         auto* groupMenu=analysisMenu->addMenu(group);
-        QAction* placeholder=groupMenu->addAction(QString("Open %1 module").arg(group));
-        connect(placeholder,&QAction::triggered,this,[this,group]{
-            showResultMessage(group, "The " + group + " module is available in the analysis menu. Statistical procedures will be added in the analysis-engine phases.");
-            m_tabs->setCurrentWidget(m_output);
-            statusBar()->showMessage(group + " module selected",3000);
-        });
+        if(group=="Diagnostics") {
+            addAction(groupMenu,"Regression Diagnostics…",[this]{runRegressionDiagnostics();});
+        } else {
+            QAction* placeholder=groupMenu->addAction(QString("Open %1 module").arg(group));
+            connect(placeholder,&QAction::triggered,this,[this,group]{
+                showResultMessage(group, "The " + group + " module is available in the analysis menu. Statistical procedures will be added in the analysis-engine phases.");
+                m_tabs->setCurrentWidget(m_output);
+                statusBar()->showMessage(group + " module selected",3000);
+            });
+        }
     }
 
     auto* viewMenu=menuBar()->addMenu("&View");
@@ -932,6 +936,40 @@ void MainWindow::showResultTable(const QString& title, const QStringList& header
     }
     m_output->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
     applyResultsFormatting();
+}
+
+void MainWindow::runRegressionDiagnostics(){
+    QStringList numeric;
+    for(const auto& v:m_data.variables()) if(v.type==VariableType::Numeric) numeric<<v.name;
+    if(numeric.size()<2){QMessageBox::information(this,"Regression Diagnostics","At least two numeric variables are required: one outcome and at least one predictor.");return;}
+    QDialog dialog(this); dialog.setWindowTitle("Regression Diagnostics"); dialog.resize(560,520);
+    auto* layout=new QVBoxLayout(&dialog);
+    auto* form=new QFormLayout; auto* outcome=new QComboBox; outcome->addItems(numeric);
+    form->addRow("Outcome variable (Y):",outcome); layout->addLayout(form);
+    layout->addWidget(new QLabel("Predictors (select one or more):"));
+    auto* predictors=new QListWidget; predictors->setSelectionMode(QAbstractItemView::ExtendedSelection); predictors->addItems(numeric); layout->addWidget(predictors,1);
+    auto* hint=new QLabel("Diagnostics use the same complete-case OLS model as Multiple Linear Regression. Hold Ctrl to select multiple predictors."); hint->setWordWrap(true); layout->addWidget(hint);
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); layout->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept); connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if(dialog.exec()!=QDialog::Accepted)return;
+    const QString yName=outcome->currentText(); QStringList predictorNames; for(auto* item:predictors->selectedItems()) predictorNames<<item->text();
+    predictorNames.removeAll(yName); predictorNames.removeDuplicates();
+    if(predictorNames.isEmpty()){QMessageBox::information(this,"Regression Diagnostics","Select at least one predictor different from the outcome variable.");return;}
+    const int yColumn=m_data.columnNames().indexOf(yName); QVector<int> predictorColumns;
+    for(const QString& name:predictorNames){const int c=m_data.columnNames().indexOf(name);if(c>=0)predictorColumns.push_back(c);}
+    if(yColumn<0 || predictorColumns.size()!=predictorNames.size()){showResultMessage("Regression Diagnostics","One or more selected variables could not be found in the dataset.");return;}
+    const auto r=AnalysisEngine::regressionDiagnostics(m_data,predictorColumns,yColumn);
+    if(r.complete<=r.parameters){showResultMessage("Regression Diagnostics",QString("Insufficient complete observations. The model has %1 parameters and requires more than %1 complete numeric observations; only %2 are available.").arg(r.parameters).arg(r.complete));return;}
+    if(r.singular){showResultMessage("Regression Diagnostics","The diagnostic model cannot be estimated because the predictors are perfectly collinear or otherwise form a singular design matrix. Remove a redundant predictor and try again.");return;}
+    if(r.rows.isEmpty()){showResultMessage("Regression Diagnostics","No complete observations were available for diagnostics.");return;}
+    QVector<QStringList> table; table.reserve(r.rows.size());
+    for(const auto& d:r.rows){QStringList flags; if(d.highLeverage)flags<<"High leverage"; if(d.influential)flags<<"Influential (Cook's D)"; if(d.largeResidual)flags<<"Large residual"; table.push_back({QString::number(d.observation),AnalysisEngine::number(d.actual),AnalysisEngine::number(d.predicted),AnalysisEngine::number(d.residual),AnalysisEngine::number(d.standardizedResidual),AnalysisEngine::number(d.studentizedResidual),AnalysisEngine::number(d.leverage),AnalysisEngine::number(d.cooksDistance),flags.join("; ")});}
+    const QString summary=QString("Complete N: %1  |  Predictors: %2  |  RMSE: %3  |  R²: %4  |  Adjusted R²: %5  |  Durbin–Watson: %6  |  Jarque–Bera p: %7")
+        .arg(r.complete).arg(r.predictors).arg(AnalysisEngine::number(r.rmse)).arg(AnalysisEngine::number(r.rSquared)).arg(AnalysisEngine::number(r.adjustedRSquared)).arg(AnalysisEngine::number(r.durbinWatson)).arg(AnalysisEngine::number(r.jarqueBeraP));
+    const QString note=QString("Observation-level OLS diagnostics for %1. High leverage is flagged when leverage > 2p/n; influential observations when Cook's distance > 4/n; large residuals when |externally studentized residual| > 2. Counts: high leverage = %2, influential = %3, large residual = %4. Maximum leverage = %5; maximum Cook's distance = %6. Residual normality is summarized by the Jarque–Bera test (p < 0.05 indicates evidence against normality). Excluded observations — blank: %7; declared missing: %8; non-numeric/invalid: %9.")
+        .arg(yName).arg(r.highLeverageCount).arg(r.influentialCount).arg(r.largeResidualCount).arg(AnalysisEngine::number(r.maxLeverage)).arg(AnalysisEngine::number(r.maxCooksDistance)).arg(r.excludedBlank).arg(r.excludedDeclaredMissing).arg(r.excludedNonNumeric);
+    showResultTable("Regression Diagnostics — "+yName,{"Observation","Actual","Predicted","Residual","Std. residual","Studentized residual","Leverage","Cook's D","Flag"},table,{1,2,3,4,5,6,7},note,summary);
+    m_tabs->setCurrentWidget(m_output->parentWidget()); statusBar()->showMessage("Regression diagnostics completed",5000);
 }
 
 void MainWindow::formatResultsTables(){
