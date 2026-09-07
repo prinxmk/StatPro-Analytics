@@ -714,20 +714,51 @@ LogisticRegressionResult AnalysisEngine::logisticRegression(const DataSet& data,
     LogisticRegressionResult out; const auto use=analysisRows(data,rows); out.observations=use.size(); out.predictors=predictorColumns.size(); out.parameters=predictorColumns.size()+1;
     if(yColumn<0||yColumn>=data.columnCount()||predictorColumns.isEmpty())return out;
     QSet<int> seen; for(int c:predictorColumns){if(c<0||c>=data.columnCount()||c==yColumn||data.variables()[c].type!=VariableType::Numeric)return out;seen.insert(c);} if(seen.size()!=predictorColumns.size())return out;
+
+    // Accept any genuinely binary outcome, not only a hard-coded list of labels.
+    // Numeric outcomes may contain any two distinct numeric values; string/boolean
+    // outcomes may contain any two distinct non-missing labels. The lower/sorted
+    // level is coded 0 and the higher/sorted level is coded 1, except for common
+    // yes/no-style labels where the semantic positive/negative direction is used.
+    QMap<QString,QString> displayLevels;
+    QStringList rawLevels;
+    const bool numericOutcome=data.variables()[yColumn].type==VariableType::Numeric;
+    for(int r:use){
+        const QString cls=classify(data,r,yColumn);
+        if(cls=="Blank"||cls=="DeclaredMissing")continue;
+        if(numericOutcome){double v;if(numericValue(data,r,yColumn,v)){const QString key=QString::number(v,'g',17);if(!displayLevels.contains(key))displayLevels.insert(key,key);}}
+        else {const QString raw=data.value(r,yColumn).toString().trimmed();if(!raw.isEmpty()){const QString key=raw.toLower();if(!displayLevels.contains(key))displayLevels.insert(key,raw);}}
+    }
+    rawLevels=displayLevels.keys();
+    if(rawLevels.size()!=2){out.outcomeLevels=rawLevels.size();return out;}
+
+    QString level0=rawLevels[0],level1=rawLevels[1];
+    if(numericOutcome){double a=level0.toDouble(),b=level1.toDouble();if(a>b)std::swap(level0,level1);}
+    else {
+        auto semantic=[](const QString& v)->int{const QString q=v.trimmed().toLower();if(q=="false"||q=="no"||q=="failure"||q=="negative"||q=="0")return 0;if(q=="true"||q=="yes"||q=="success"||q=="positive"||q=="1")return 1;return -1;};
+        const int s0=semantic(level0),s1=semantic(level1);if(s0==1&&s1==0)std::swap(level0,level1);else if(s0<0||s1<0){if(level0>level1)std::swap(level0,level1);}
+    }
+    out.outcomeLevel0=numericOutcome?level0:displayLevels.value(level0,level0); out.outcomeLevel1=numericOutcome?level1:displayLevels.value(level1,level1); out.outcomeLevels=2;
+
     QVector<QVector<double>> X; QVector<double> Y; int eb=0,em=0,ei=0;
-    for(int r:use){bool blank=false,missing=false,invalid=false; const QString yc=classify(data,r,yColumn); if(yc=="Blank")blank=true;else if(yc=="DeclaredMissing")missing=true;else if(yc!="Valid")invalid=true; double yv=NAN; bool yok=false;
-        if(yc=="Valid"){QString t=data.value(r,yColumn).toString().trimmed();bool ok=false;yv=t.toDouble(&ok);if(ok&&std::isfinite(yv)&&(yv==0.0||yv==1.0))yok=true;else {const QString q=t.toLower();if(q=="true"||q=="yes"||q=="success"||q=="positive"){yv=1;yok=true;}else if(q=="false"||q=="no"||q=="failure"||q=="negative"){yv=0;yok=true;}else invalid=true;}}
+    for(int r:use){bool blank=false,missing=false,invalid=false; const QString yc=classify(data,r,yColumn);
+        if(yc=="Blank")blank=true;else if(yc=="DeclaredMissing")missing=true;else if(yc!="Valid")invalid=true;
+        double yv=NAN; bool yok=false;
+        if(yc=="Valid"){
+            if(numericOutcome){double v;if(numericValue(data,r,yColumn,v)){const QString key=QString::number(v,'g',17);if(key==level0){yv=0;yok=true;}else if(key==level1){yv=1;yok=true;}else invalid=true;}}
+            else {const QString key=data.value(r,yColumn).toString().trimmed().toLower();if(key==level0){yv=0;yok=true;}else if(key==level1){yv=1;yok=true;}else invalid=true;}
+        }
         QVector<double> row;row.reserve(predictorColumns.size());bool xok=true;for(int c:predictorColumns){const QString cls=classify(data,r,c);if(cls=="Blank")blank=true;else if(cls=="DeclaredMissing")missing=true;else if(cls!="Valid")invalid=true;double v=NAN;if(cls=="Valid"&&numericValue(data,r,c,v))row.push_back(v);else{xok=false;row.push_back(NAN);}}
         if(yok&&xok){X.push_back(row);Y.push_back(yv);}else if(blank)++eb;else if(missing)++em;else ++ei;
     }
     out.complete=Y.size();out.excludedBlank=eb;out.excludedDeclaredMissing=em;out.excludedNonNumeric=ei;const int n=out.complete,k=predictorColumns.size(),p=k+1;if(n<=p)return out;
-    QVector<double> beta(p,0.0); QVector<QVector<double>> cov; bool converged=false;
+    QVector<QVector<double>> hInv; QVector<double> beta(p,0.0); bool converged=false;
     auto sigmoid=[](double z){if(z>=0){double e=std::exp(-z);return 1.0/(1.0+e);}double e=std::exp(z);return e/(1.0+e);};
-    for(int iter=0;iter<100;++iter){QVector<QVector<double>> h(p,QVector<double>(p,0));QVector<double> g(p,0);for(int i=0;i<n;++i){QVector<double> z(p);z[0]=1;for(int j=0;j<k;++j)z[j+1]=X[i][j];double eta=0;for(int a=0;a<p;++a)eta+=beta[a]*z[a];eta=std::max(-30.0,std::min(30.0,eta));double pr=sigmoid(eta),w=std::max(1e-8,pr*(1-pr));for(int a=0;a<p;++a){g[a]+=z[a]*(Y[i]-pr);for(int b=0;b<p;++b)h[a][b]+=w*z[a]*z[b];}}QVector<QVector<double>> inv;if(!invertSquareMatrix(h,inv)){out.singular=true;return out;}QVector<double> step(p,0);for(int a=0;a<p;++a)for(int b=0;b<p;++b)step[a]+=inv[a][b]*g[b];double maxStep=0;for(int a=0;a<p;++a){beta[a]+=step[a];maxStep=std::max(maxStep,std::fabs(step[a]));}out.iterations=iter+1;if(maxStep<1e-7){converged=true;cov=inv;break;}}
+    for(int iter=0;iter<100;++iter){QVector<QVector<double>> h(p,QVector<double>(p,0));QVector<double> g(p,0);for(int i=0;i<n;++i){QVector<double> z(p);z[0]=1;for(int j=0;j<k;++j)z[j+1]=X[i][j];double eta=0;for(int a=0;a<p;++a)eta+=beta[a]*z[a];eta=std::max(-30.0,std::min(30.0,eta));double pr=sigmoid(eta),w=std::max(1e-8,pr*(1-pr));for(int a=0;a<p;++a){g[a]+=z[a]*(Y[i]-pr);for(int b=0;b<p;++b)h[a][b]+=w*z[a]*z[b];}}if(!invertSquareMatrix(h,hInv)){out.singular=true;return out;}QVector<double> step(p,0);for(int a=0;a<p;++a)for(int b=0;b<p;++b)step[a]+=hInv[a][b]*g[b];double maxStep=0;for(int a=0;a<p;++a){beta[a]+=step[a];maxStep=std::max(maxStep,std::fabs(step[a]));}out.iterations=iter+1;if(maxStep<1e-7){converged=true;break;}}
     out.converged=converged;if(!converged)return out;
     double ll=0,nullLL=0;int tp=0,tn=0,fp=0,fn=0;double meanY=sampleMean(Y);
     for(int i=0;i<n;++i){double eta=beta[0];for(int j=0;j<k;++j)eta+=beta[j+1]*X[i][j];eta=std::max(-30.0,std::min(30.0,eta));double pr=sigmoid(eta);ll+=Y[i]*std::log(std::max(1e-15,pr))+(1-Y[i])*std::log(std::max(1e-15,1-pr));int pred=pr>=0.5?1:0;if(pred&&Y[i]==1)++tp;else if(!pred&&Y[i]==0)++tn;else if(pred)++fp;else ++fn;}nullLL=n*(meanY>0&&meanY<1?(meanY*std::log(meanY)+(1-meanY)*std::log(1-meanY)):0.0);out.logLikelihood=ll;out.nullLogLikelihood=nullLL;out.minus2LogLikelihood=-2*ll;out.aic=-2*ll+2*p;out.bic=-2*ll+p*std::log(n);out.mcfaddenR2=(nullLL!=0)?1.0-ll/nullLL:NAN;out.truePositive=tp;out.trueNegative=tn;out.falsePositive=fp;out.falseNegative=fn;out.accuracy=static_cast<double>(tp+tn)/n;out.sensitivity=(tp+fn)>0?static_cast<double>(tp)/(tp+fn):NAN;out.specificity=(tn+fp)>0?static_cast<double>(tn)/(tn+fp):NAN;
-    const double crit=1.95996398454;for(int a=0;a<p;++a){LogisticCoefficient c;c.term=a==0?"Intercept":data.variables()[predictorColumns[a-1]].name;c.estimate=beta[a];c.stdError=std::sqrt(std::max(0.0,cov[a][a]));if(c.stdError>0){c.z=c.estimate/c.stdError;c.p=2.0*(1.0-normalCdf(std::fabs(c.z)));c.oddsRatio=std::exp(std::max(-700.0,std::min(700.0,c.estimate)));c.ciLow=std::exp(std::max(-700.0,std::min(700.0,c.estimate-crit*c.stdError)));c.ciHigh=std::exp(std::max(-700.0,std::min(700.0,c.estimate+crit*c.stdError)));}out.coefficients.push_back(c);}return out;
+    const double crit=1.95996398454;for(int a=0;a<p;++a){LogisticCoefficient c;c.term=a==0?"Intercept":data.variables()[predictorColumns[a-1]].name;c.estimate=beta[a];c.stdError=std::sqrt(std::max(0.0,hInv[a][a]));if(c.stdError>0){c.z=c.estimate/c.stdError;c.p=2.0*(1.0-normalCdf(std::fabs(c.z)));c.oddsRatio=std::exp(std::max(-700.0,std::min(700.0,c.estimate)));c.ciLow=std::exp(std::max(-700.0,std::min(700.0,c.estimate-crit*c.stdError)));c.ciHigh=std::exp(std::max(-700.0,std::min(700.0,c.estimate+crit*c.stdError)));}out.coefficients.push_back(c);}return out;
 }
 
 TimeSeriesResult AnalysisEngine::timeSeriesAnalysis(const DataSet& data,int timeColumn,int valueColumn,int movingWindow,const QVector<int>& rows){

@@ -72,7 +72,7 @@ struct LogisticCoefficient {
 };
 struct LogisticRegressionResult {
     int observations{0}, complete{0}, excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
-    int predictors{0}, parameters{0}, iterations{0}; bool converged{false}, singular{false};
+    int predictors{0}, parameters{0}, iterations{0}, outcomeLevels{0}; QString outcomeLevel0, outcomeLevel1; bool converged{false}, singular{false};
     double logLikelihood{NAN}, nullLogLikelihood{NAN}, minus2LogLikelihood{NAN}, aic{NAN}, bic{NAN};
     double mcfaddenR2{NAN}, accuracy{NAN}, sensitivity{NAN}, specificity{NAN};
     int truePositive{0}, trueNegative{0}, falsePositive{0}, falseNegative{0};
