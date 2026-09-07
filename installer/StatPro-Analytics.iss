@@ -1,6 +1,6 @@
 ; StatPro Analytics installer
 #define MyAppName "StatPro Analytics"
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.4.0"
 #define MyAppPublisher "StatPro Analytics"
 #define MyAppExeName "StatProAnalytics.exe"
 

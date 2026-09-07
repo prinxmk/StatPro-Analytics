@@ -5,6 +5,29 @@
 
 namespace StatPro {
 
+namespace {
+struct RankedData { QVector<double> ranks; QVector<int> tieSizes; };
+RankedData rankValues(const QVector<double>& values) {
+    RankedData out; out.ranks.resize(values.size());
+    QVector<int> idx(values.size()); for(int i=0;i<idx.size();++i) idx[i]=i;
+    std::sort(idx.begin(),idx.end(),[&](int a,int b){ return values[a]<values[b]; });
+    int i=0;
+    while(i<idx.size()){
+        int j=i+1; while(j<idx.size() && values[idx[j]]==values[idx[i]]) ++j;
+        const double rank=(i+1+j)/2.0; out.tieSizes.push_back(j-i);
+        for(int k=i;k<j;++k) out.ranks[idx[k]]=rank;
+        i=j;
+    }
+    return out;
+}
+double tieCorrection(const QVector<int>& ties, int n){
+    if(n<=1) return 1.0;
+    double sum=0; for(int t:ties) if(t>1) sum += static_cast<double>(t)*t*t-t;
+    const double den=static_cast<double>(n)*n*n-n;
+    return den>0 ? 1.0-sum/den : 1.0;
+}
+}
+
 bool AnalysisEngine::numericValue(const DataSet& data, int row, int column, double& out) {
     if (row < 0 || row >= data.rowCount() || column < 0 || column >= data.columnCount()) return false;
     if (classify(data, row, column) != "Valid") return false;
@@ -335,6 +358,37 @@ AnovaResult AnalysisEngine::oneWayAnova(const DataSet& data,int groupColumn,int 
     for(const auto& s:out.groupStats){ if(s.group.startsWith("(")||s.valid<=0) continue; const auto x=vals.value(s.group); out.ssBetween+=s.valid*std::pow(s.mean-out.grandMean,2); for(double v:x) out.ssWithin+=std::pow(v-s.mean,2); }
     out.ssTotal=out.ssBetween+out.ssWithin; out.dfBetween=testGroups-1; out.dfWithin=out.valid-testGroups;
     if(out.dfWithin<=0)return out; out.msBetween=out.ssBetween/out.dfBetween; out.msWithin=out.ssWithin/out.dfWithin; out.f=out.msWithin>0?out.msBetween/out.msWithin:NAN; out.p=std::isfinite(out.f)?fSurvival(out.f,out.dfBetween,out.dfWithin):NAN; out.etaSquared=out.ssTotal>0?out.ssBetween/out.ssTotal:NAN; return out;
+}
+
+NonparametricResult AnalysisEngine::mannWhitneyU(const DataSet& data,int groupColumn,int valueColumn,const QString& group1,const QString& group2,const QVector<int>& rows){
+    NonparametricResult out; const auto use=analysisRows(data,rows); out.observations=use.size(); out.group1=group1; out.group2=group2;
+    QVector<double> a,b,pooled; QVector<int> source;
+    for(int r:use){ const QString gc=classify(data,r,groupColumn); const QString vc=classify(data,r,valueColumn); if(gc!="Valid") { if(gc=="Blank")++out.blank; else if(gc=="DeclaredMissing")++out.declaredMissing; else ++out.nonNumeric; continue; } if(vc!="Valid"){ if(vc=="Blank")++out.blank; else if(vc=="DeclaredMissing")++out.declaredMissing; else ++out.nonNumeric; continue; } double v; if(!numericValue(data,r,valueColumn,v)){++out.nonNumeric;continue;} const QString g=data.value(r,groupColumn).toString().trimmed(); if(g==group1)a.push_back(v); else if(g==group2)b.push_back(v); }
+    out.n1=a.size(); out.n2=b.size(); out.valid=out.n1+out.n2; if(out.n1<1||out.n2<1)return out;
+    pooled=a; pooled+=b; const auto ranked=rankValues(pooled); double rankA=0,rankB=0; for(int i=0;i<a.size();++i)rankA+=ranked.ranks[i]; for(int i=a.size();i<pooled.size();++i)rankB+=ranked.ranks[i];
+    out.meanRank1=rankA/out.n1; out.meanRank2=rankB/out.n2; out.u1=rankA-out.n1*(out.n1+1)/2.0; out.u2=rankB-out.n2*(out.n2+1)/2.0; out.statistic=std::min(out.u1,out.u2);
+    const int n=pooled.size(); double var=static_cast<double>(out.n1)*out.n2/12.0*(n+1); double tc=tieCorrection(ranked.tieSizes,n); var*=tc; if(var>0){const double mean=static_cast<double>(out.n1)*out.n2/2.0; const double cc=out.statistic<mean?0.5:-0.5; out.z=(out.statistic-mean+cc)/std::sqrt(var); out.p=2.0*(1.0-normalCdf(std::fabs(out.z))); out.effectSize=std::fabs(out.z)/std::sqrt(static_cast<double>(n));}
+    return out;
+}
+
+NonparametricResult AnalysisEngine::wilcoxonSignedRank(const DataSet& data,int firstColumn,int secondColumn,const QVector<int>& rows){
+    NonparametricResult out; const auto use=analysisRows(data,rows); out.observations=use.size(); QVector<double> d;
+    for(int r:use){ const QString a=classify(data,r,firstColumn), b=classify(data,r,secondColumn); if(a=="Valid"&&b=="Valid"){double x,y;if(numericValue(data,r,firstColumn,x)&&numericValue(data,r,secondColumn,y)){double diff=x-y;if(diff!=0)d.push_back(diff);else ++out.pairs; }else ++out.nonNumeric;} else {if(a=="Blank"||b=="Blank")++out.blank;else if(a=="DeclaredMissing"||b=="DeclaredMissing")++out.declaredMissing;else ++out.nonNumeric;} }
+    out.pairs=d.size(); out.valid=out.pairs; if(out.pairs<2)return out;
+    QVector<double> absd;absd.reserve(d.size());for(double x:d)absd.push_back(std::fabs(x));const auto ranked=rankValues(absd);double wp=0,wm=0;for(int i=0;i<d.size();++i){if(d[i]>0)wp+=ranked.ranks[i];else wm+=ranked.ranks[i];}out.wPlus=wp;out.wMinus=wm;out.statistic=std::min(wp,wm);
+    const int n=d.size();double var=n*(n+1)*(2*n+1)/24.0;double tieSum=0;for(int t:ranked.tieSizes)if(t>1)tieSum+=static_cast<double>(t)*t*t-t;var-=tieSum/48.0;if(var>0){const double mean=n*(n+1)/4.0;const double cc=out.statistic<mean?0.5:-0.5;out.z=(out.statistic-mean+cc)/std::sqrt(var);out.p=2.0*(1.0-normalCdf(std::fabs(out.z)));out.effectSize=std::fabs(out.z)/std::sqrt(static_cast<double>(n));}return out;
+}
+
+NonparametricResult AnalysisEngine::kruskalWallis(const DataSet& data,int groupColumn,int valueColumn,const QVector<int>& rows){
+    NonparametricResult out;const auto use=analysisRows(data,rows);out.observations=use.size();QMap<QString,QVector<double>> groups;
+    for(int r:use){const QString gc=classify(data,r,groupColumn),vc=classify(data,r,valueColumn);if(gc!="Valid"||vc!="Valid"){if(gc=="Blank"||vc=="Blank"||vc=="DeclaredMissing"||vc=="NonNumeric"){} if(gc=="Blank"||vc=="Blank")++out.blank;else if(gc=="DeclaredMissing"||vc=="DeclaredMissing")++out.declaredMissing;else ++out.nonNumeric;continue;}double v;if(!numericValue(data,r,valueColumn,v)){++out.nonNumeric;continue;}groups[data.value(r,groupColumn).toString().trimmed()].push_back(v);}
+    QVector<double> pooled;QVector<QString> labels;for(auto it=groups.cbegin();it!=groups.cend();++it)if(!it.value().isEmpty()){labels.push_back(it.key());pooled+=it.value();}out.groups=labels.size();out.valid=pooled.size();out.groupLabels=labels;for(const auto&g:labels)out.groupNs.push_back(groups.value(g).size());if(out.groups<2)return out;
+    const auto ranked=rankValues(pooled);QMap<QString,double> rankSums;int pos=0;for(const auto&g:labels){double rs=0;for(int j=0;j<groups.value(g).size();++j)rs+=ranked.ranks[pos++];rankSums[g]=rs;out.groupMeanRanks.push_back(rs/groups.value(g).size());}
+    const double n=pooled.size();double H=0;for(int i=0;i<labels.size();++i){const double nj=out.groupNs[i];H+=rankSums.value(labels[i])*rankSums.value(labels[i])/nj;}H=12.0/(n*(n+1))*H-3.0*(n+1);const double tc=tieCorrection(ranked.tieSizes,pooled.size());out.statistic=tc>0?H/tc:H;out.z=out.groups-1;out.p=chiSquareSurvival(out.statistic,out.groups-1);out.effectSize=std::max(0.0,(out.statistic-out.groups+1)/(n-out.groups));return out;
+}
+
+SpearmanResult AnalysisEngine::spearmanCorrelation(const DataSet& data,int xColumn,int yColumn,const QVector<int>& rows){
+    SpearmanResult out;const auto use=analysisRows(data,rows);out.observations=use.size();QVector<double>x,y;for(int r:use){const QString a=classify(data,r,xColumn),b=classify(data,r,yColumn);if(a=="Valid"&&b=="Valid"){double xv,yv;if(numericValue(data,r,xColumn,xv)&&numericValue(data,r,yColumn,yv)){x.push_back(xv);y.push_back(yv);}else ++out.nonNumeric;}else{if(a=="Blank"||b=="Blank")++out.blank;else if(a=="DeclaredMissing"||b=="DeclaredMissing")++out.declaredMissing;else ++out.nonNumeric;}}out.pairs=x.size();out.valid=out.pairs;if(out.pairs<3)return out;const auto rx=rankValues(x),ry=rankValues(y);double sx=0,sy=0,sxx=0,syy=0,sxy=0;for(int i=0;i<x.size();++i){sx+=rx.ranks[i];sy+=ry.ranks[i];}const double mx=sx/x.size(),my=sy/y.size();for(int i=0;i<x.size();++i){const double dx=rx.ranks[i]-mx,dy=ry.ranks[i]-my;sxx+=dx*dx;syy+=dy*dy;sxy+=dx*dy;}if(sxx<=0||syy<=0)return out;out.rho=sxy/std::sqrt(sxx*syy);out.df=out.pairs-2;out.t=std::fabs(out.rho)>=1.0?std::copysign(INFINITY,out.rho):out.rho*std::sqrt(out.df/(1-out.rho*out.rho));out.p=std::fabs(out.rho)>=1.0?0.0:2.0*(1.0-studentTCdf(std::fabs(out.t),out.df));return out;
 }
 
 RegressionResult AnalysisEngine::simpleLinearRegression(const DataSet& data,int xColumn,int yColumn,const QVector<int>& rows){

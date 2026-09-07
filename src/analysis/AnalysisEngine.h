@@ -28,6 +28,14 @@ struct IndependentTResult {
 };
 struct PairedTResult : ObservationAccounting { int pairs{0}; double meanDifference{NAN}, sdDifference{NAN}, t{NAN}, df{NAN}, p{NAN}, ciLow{NAN}, ciHigh{NAN}, cohensDz{NAN}; };
 struct ChiSquareResult : ObservationAccounting { int rows{0}, columns{0}; double chiSquare{NAN}, df{NAN}, p{NAN}, cramersV{NAN}; QVector<QString> rowLabels, columnLabels; QVector<QVector<double>> observed, expected; };
+struct NonparametricResult : ObservationAccounting {
+    QString group1, group2; int n1{0}, n2{0}; int pairs{0}; int groups{0};
+    double statistic{NAN}, z{NAN}, p{NAN}, effectSize{NAN};
+    double meanRank1{NAN}, meanRank2{NAN}, u1{NAN}, u2{NAN};
+    double wPlus{NAN}, wMinus{NAN};
+    QStringList groupLabels; QVector<int> groupNs; QVector<double> groupMeanRanks;
+};
+struct SpearmanResult : ObservationAccounting { int pairs{0}; double rho{NAN}, t{NAN}, df{NAN}, p{NAN}; };
 struct AnovaGroup { QString group; int observations{0}, valid{0}, blank{0}, declaredMissing{0}, nonNumeric{0}; double mean{NAN}, stdDev{NAN}; };
 struct AnovaResult : ObservationAccounting { int groups{0}; double grandMean{NAN}, ssBetween{NAN}, ssWithin{NAN}, ssTotal{NAN}, msBetween{NAN}, msWithin{NAN}, f{NAN}, dfBetween{NAN}, dfWithin{NAN}, p{NAN}, etaSquared{NAN}; QVector<AnovaGroup> groupStats; };
 struct RegressionResult {
@@ -128,6 +136,10 @@ public:
     static PairedTResult pairedTTest(const DataSet&, int firstColumn, int secondColumn, const QVector<int>& rows = {});
     static ChiSquareResult chiSquare(const DataSet&, int rowColumn, int columnColumn, const QVector<int>& rows = {});
     static AnovaResult oneWayAnova(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});
+    static NonparametricResult mannWhitneyU(const DataSet&, int groupColumn, int valueColumn, const QString& group1, const QString& group2, const QVector<int>& rows = {});
+    static NonparametricResult wilcoxonSignedRank(const DataSet&, int firstColumn, int secondColumn, const QVector<int>& rows = {});
+    static NonparametricResult kruskalWallis(const DataSet&, int groupColumn, int valueColumn, const QVector<int>& rows = {});
+    static SpearmanResult spearmanCorrelation(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static RegressionResult simpleLinearRegression(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static MultipleRegressionResult multipleLinearRegression(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
     static MultipleRegressionResult regressionWithCategoricalPredictors(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});

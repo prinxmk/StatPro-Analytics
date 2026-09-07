@@ -63,6 +63,10 @@ private slots:
     void runPairedTTest();
     void runChiSquare();
     void runOneWayAnova();
+    void runMannWhitneyU();
+    void runWilcoxonSignedRank();
+    void runKruskalWallis();
+    void runSpearmanCorrelation();
     void runSimpleLinearRegression();
     void runMultipleLinearRegression();
     void runRegressionWithCategoricalPredictors();

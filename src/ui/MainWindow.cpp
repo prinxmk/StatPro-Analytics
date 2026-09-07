@@ -229,6 +229,11 @@ void MainWindow::buildMenus(){
     addAction(testsMenu,"Paired-Samples t Test…",[this]{runPairedTTest();});
     addAction(testsMenu,"Chi-Square Test of Independence…",[this]{runChiSquare();});
     addAction(testsMenu,"One-Way ANOVA…",[this]{runOneWayAnova();});
+    auto* nonparametricMenu=testsMenu->addMenu("Nonparametric Tests");
+    addAction(nonparametricMenu,"Mann–Whitney U Test…",[this]{runMannWhitneyU();});
+    addAction(nonparametricMenu,"Wilcoxon Signed-Rank Test…",[this]{runWilcoxonSignedRank();});
+    addAction(nonparametricMenu,"Kruskal–Wallis Test…",[this]{runKruskalWallis();});
+    addAction(nonparametricMenu,"Spearman Rank Correlation…",[this]{runSpearmanCorrelation();});
     auto* regressionMenu=analysisMenu->addMenu("Regression");
     addAction(regressionMenu,"Simple Linear Regression…",[this]{runSimpleLinearRegression();});
     addAction(regressionMenu,"Multiple Linear Regression…",[this]{runMultipleLinearRegression();});
@@ -801,6 +806,39 @@ void MainWindow::runOneWayAnova(){
     m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("One-way ANOVA completed",5000);
 }
 
+
+void MainWindow::runMannWhitneyU(){
+    QStringList all,numeric;for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"Mann–Whitney U Test","A numeric outcome and a grouping variable are required.");return;}
+    bool ok=false;QString value=QInputDialog::getItem(this,"Mann–Whitney U Test","Numeric outcome:",numeric,0,false,&ok);if(!ok)return;
+    QStringList groupingNames;QMap<QString,QStringList> levelsByName;for(const auto&v:m_data.variables()){if(v.name==value)continue;const int c=m_data.columnNames().indexOf(v.name);const auto levels=AnalysisEngine::independentGroupLevels(m_data,c);if(levels.size()>=2){groupingNames<<v.name;levelsByName.insert(v.name,levels);}}
+    if(groupingNames.isEmpty()){showResultMessage("Mann–Whitney U Test","No grouping variable with at least two valid groups was found.");return;}
+    QString group=QInputDialog::getItem(this,"Mann–Whitney U Test","Grouping variable:",groupingNames,0,false,&ok);if(!ok)return;const int gc=m_data.columnNames().indexOf(group);const auto levels=levelsByName.value(group);QString g1=QInputDialog::getItem(this,"Mann–Whitney U Test","Group 1:",levels,0,false,&ok);if(!ok)return;QStringList remaining=levels;remaining.removeAll(g1);QString g2=QInputDialog::getItem(this,"Mann–Whitney U Test","Group 2:",remaining,0,false,&ok);if(!ok)return;
+    const int vc=m_data.columnNames().indexOf(value);const auto r=AnalysisEngine::mannWhitneyU(m_data,gc,vc,g1,g2);if(r.n1<1||r.n2<1){showResultMessage("Mann–Whitney U Test",QString("Each selected group needs at least 1 valid numeric outcome. %1: %2; %3: %4.").arg(g1).arg(r.n1).arg(g2).arg(r.n2));return;}
+    QVector<QStringList> table={{g1,QString::number(r.n1),AnalysisEngine::number(r.meanRank1),AnalysisEngine::number(r.u1)},{g2,QString::number(r.n2),AnalysisEngine::number(r.meanRank2),AnalysisEngine::number(r.u2)}};
+    const QString summary=QString("U = %1  |  z = %2  |  p-value = %3  |  Effect size r = %4").arg(AnalysisEngine::number(r.statistic)).arg(AnalysisEngine::number(r.z)).arg(AnalysisEngine::number(r.p)).arg(AnalysisEngine::number(r.effectSize));
+    showResultTable("Mann–Whitney U Test — "+value+" by "+group,{"Group","N","Mean rank","U"},table,{1,2,3},inferentialAccounting(r),summary+". Two-sided asymptotic normal approximation with tie correction; effect size r = |z|/√N.");m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Mann–Whitney U test completed",5000);
+}
+
+void MainWindow::runWilcoxonSignedRank(){
+    QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.size()<2){QMessageBox::information(this,"Wilcoxon Signed-Rank Test","At least two numeric variables are required.");return;}bool ok=false;QString first=QInputDialog::getItem(this,"Wilcoxon Signed-Rank Test","First measurement:",names,0,false,&ok);if(!ok)return;QString second=QInputDialog::getItem(this,"Wilcoxon Signed-Rank Test","Second measurement:",names,0,false,&ok);if(!ok)return;if(first==second){QMessageBox::information(this,"Wilcoxon Signed-Rank Test","Choose two different measurements.");return;}
+    const auto r=AnalysisEngine::wilcoxonSignedRank(m_data,m_data.columnNames().indexOf(first),m_data.columnNames().indexOf(second));if(r.pairs<2){showResultMessage("Wilcoxon Signed-Rank Test","At least 2 non-zero complete paired differences are required.");return;}
+    QVector<QStringList> table={{first+" − "+second,QString::number(r.pairs),AnalysisEngine::number(r.wPlus),AnalysisEngine::number(r.wMinus),AnalysisEngine::number(r.statistic),AnalysisEngine::number(r.z),AnalysisEngine::number(r.p),AnalysisEngine::number(r.effectSize)}};
+    showResultTable("Wilcoxon Signed-Rank Test — "+first+" vs "+second,{"Comparison","N","Positive rank sum","Negative rank sum","W","z","p-value","Effect size r"},table,{1,2,3,4,5,6,7},inferentialAccounting(r),"Two-sided asymptotic normal approximation with tie correction and continuity correction. Zero differences are omitted from the signed-rank calculation; effect size r = |z|/√N.");m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Wilcoxon signed-rank test completed",5000);
+}
+
+void MainWindow::runKruskalWallis(){
+    QStringList all,numeric;for(const auto&v:m_data.variables()){all<<v.name;if(v.type==VariableType::Numeric)numeric<<v.name;}if(numeric.isEmpty()||all.size()<2){QMessageBox::information(this,"Kruskal–Wallis Test","A numeric outcome and grouping variable are required.");return;}bool ok=false;QString value=QInputDialog::getItem(this,"Kruskal–Wallis Test","Numeric outcome:",numeric,0,false,&ok);if(!ok)return;QStringList groupingNames;for(const auto&v:m_data.variables())if(v.name!=value){const auto levels=AnalysisEngine::independentGroupLevels(m_data,m_data.columnNames().indexOf(v.name));if(levels.size()>=2)groupingNames<<v.name;}if(groupingNames.isEmpty()){showResultMessage("Kruskal–Wallis Test","No grouping variable with at least two valid groups was found.");return;}QString group=QInputDialog::getItem(this,"Kruskal–Wallis Test","Grouping variable:",groupingNames,0,false,&ok);if(!ok)return;
+    const auto r=AnalysisEngine::kruskalWallis(m_data,m_data.columnNames().indexOf(group),m_data.columnNames().indexOf(value));if(r.groups<2){showResultMessage("Kruskal–Wallis Test","At least two groups with valid numeric observations are required.");return;}
+    QVector<QStringList> table;for(int i=0;i<r.groupLabels.size();++i)table.push_back({r.groupLabels[i],QString::number(r.groupNs[i]),AnalysisEngine::number(r.groupMeanRanks[i])});
+    const QString summary=QString("H = %1  |  df = %2  |  p-value = %3  |  Epsilon-squared = %4").arg(AnalysisEngine::number(r.statistic)).arg(AnalysisEngine::number(r.z)).arg(AnalysisEngine::number(r.p)).arg(AnalysisEngine::number(r.effectSize));
+    showResultTable("Kruskal–Wallis Test — "+value+" by "+group,{"Group","N","Mean rank"},table,{1,2},inferentialAccounting(r),summary+". Tie-corrected chi-square approximation; epsilon-squared is reported as an omnibus effect-size estimate. A significant result indicates that at least one group distribution/rank location differs, but does not identify which groups differ.");m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Kruskal–Wallis test completed",5000);
+}
+
+void MainWindow::runSpearmanCorrelation(){
+    QStringList names;for(const auto&v:m_data.variables())if(v.type==VariableType::Numeric)names<<v.name;if(names.size()<2){QMessageBox::information(this,"Spearman Rank Correlation","At least two numeric variables are required.");return;}bool ok=false;QString x=QInputDialog::getItem(this,"Spearman Rank Correlation","Variable X:",names,0,false,&ok);if(!ok)return;QString y=QInputDialog::getItem(this,"Spearman Rank Correlation","Variable Y:",names,0,false,&ok);if(!ok)return;if(x==y){QMessageBox::information(this,"Spearman Rank Correlation","Choose two different variables.");return;}
+    const auto r=AnalysisEngine::spearmanCorrelation(m_data,m_data.columnNames().indexOf(x),m_data.columnNames().indexOf(y));if(r.pairs<3){showResultMessage("Spearman Rank Correlation","At least 3 complete numeric pairs are required.");return;}QString interpretation=std::fabs(r.rho)<0.1?"negligible":std::fabs(r.rho)<0.3?"weak":std::fabs(r.rho)<0.5?"moderate":"strong";interpretation+=r.rho>=0?" positive":" negative";
+    QVector<QStringList> table={{x+" × "+y,QString::number(r.pairs),AnalysisEngine::number(r.rho),AnalysisEngine::number(r.t),AnalysisEngine::number(r.df),AnalysisEngine::number(r.p),interpretation}};showResultTable("Spearman Rank Correlation — "+x+" × "+y,{"Variables","Complete pairs","Spearman rho","t","df","p-value","Interpretation"},table,{1,2,3,4,5},inferentialAccounting(r),"Spearman correlation is computed as Pearson correlation on ranked values, with average ranks for ties. The p-value uses a Student-t approximation with n−2 degrees of freedom.");m_tabs->setCurrentWidget(m_output->parentWidget());statusBar()->showMessage("Spearman correlation completed",5000);
+}
 
 void MainWindow::runSimpleLinearRegression(){
     QStringList numeric;
