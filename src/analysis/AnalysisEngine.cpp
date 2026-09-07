@@ -815,6 +815,47 @@ LogisticRegressionResult AnalysisEngine::logisticRegression(const DataSet& data,
     const double crit=1.95996398454;for(int a=0;a<p;++a){LogisticCoefficient c;c.term=a==0?"Intercept":data.variables()[predictorColumns[a-1]].name;c.estimate=beta[a];c.stdError=std::sqrt(std::max(0.0,hInv[a][a]));if(c.stdError>0){c.z=c.estimate/c.stdError;c.p=2.0*(1.0-normalCdf(std::fabs(c.z)));c.oddsRatio=std::exp(std::max(-700.0,std::min(700.0,c.estimate)));c.ciLow=std::exp(std::max(-700.0,std::min(700.0,c.estimate-crit*c.stdError)));c.ciHigh=std::exp(std::max(-700.0,std::min(700.0,c.estimate+crit*c.stdError)));}out.coefficients.push_back(c);}return out;
 }
 
+
+namespace {
+static double safeExp(double x){ return std::exp(std::max(-700.0,std::min(700.0,x))); }
+static double poissonLogLik(const QVector<double>& y,const QVector<double>& mu){double ll=0;for(int i=0;i<y.size();++i)ll+=y[i]*std::log(std::max(mu[i],1e-300))-mu[i]-std::lgamma(y[i]+1.0);return ll;}
+static double poissonDeviance(const QVector<double>& y,const QVector<double>& mu){double d=0;for(int i=0;i<y.size();++i){if(y[i]>0)d+=2.0*(y[i]*std::log(y[i]/std::max(mu[i],1e-300))-(y[i]-mu[i]));else d+=2.0*mu[i];}return std::max(0.0,d);}
+static double poissonPearson(const QVector<double>& y,const QVector<double>& mu){double q=0;for(int i=0;i<y.size();++i){const double m=std::max(mu[i],1e-12);q+=(y[i]-m)*(y[i]-m)/m;}return q;}
+
+static bool fitCountGlm(const QVector<QVector<double>>& X,const QVector<double>& y,bool negativeBinomial,double& alpha,QVector<double>& beta,QVector<QVector<double>>& cov,int& iterations,bool& singular,bool& converged){
+    const int n=y.size(),p=X.isEmpty()?0:X[0].size(); if(n<=p||p==0)return false; beta=QVector<double>(p,0.0); double mean=0;for(double v:y)mean+=v;mean/=std::max(1,n);beta[0]=std::log(std::max(mean,1e-6));
+    converged=false; singular=false; iterations=0;
+    for(int outer=0;outer<(negativeBinomial?12:1);++outer){
+        for(int iter=0;iter<100;++iter){
+            ++iterations;QVector<double> mu(n),eta(n),z(n),w(n);for(int i=0;i<n;++i){double e=0;for(int j=0;j<p;++j)e+=X[i][j]*beta[j];e=std::max(-30.0,std::min(30.0,e));eta[i]=e;mu[i]=safeExp(e);double var=negativeBinomial?mu[i]+alpha*mu[i]*mu[i]:mu[i];w[i]=mu[i]*mu[i]/std::max(var,1e-12);z[i]=e+(y[i]-mu[i])/std::max(mu[i],1e-12);}
+            QVector<QVector<double>> xtwx(p,QVector<double>(p,0.0));QVector<double> xtwz(p,0.0);for(int i=0;i<n;++i)for(int a=0;a<p;++a){xtwz[a]+=X[i][a]*w[i]*z[i];for(int b=0;b<p;++b)xtwx[a][b]+=X[i][a]*w[i]*X[i][b];}
+            QVector<QVector<double>> inv;if(!invertSquareMatrix(xtwx,inv)){singular=true;return false;}QVector<double> next(p,0.0);for(int a=0;a<p;++a)for(int b=0;b<p;++b)next[a]+=inv[a][b]*xtwz[b];double maxDelta=0;for(int j=0;j<p;++j)maxDelta=std::max(maxDelta,std::fabs(next[j]-beta[j]));beta=next;if(maxDelta<1e-8){converged=true;cov=inv;break;}
+        }
+        if(!converged)return false;
+        if(!negativeBinomial)break;
+        QVector<double> mu(n);for(int i=0;i<n;++i){double e=0;for(int j=0;j<p;++j)e+=X[i][j]*beta[j];mu[i]=safeExp(std::max(-30.0,std::min(30.0,e)));}
+        const double pearson=poissonPearson(y,mu);double sumMu2=0;for(double m:mu)sumMu2+=m*m;const double df=std::max(1,n-p);double nextAlpha=std::max(0.0,(pearson-df)/std::max(sumMu2,1e-12));nextAlpha=std::min(nextAlpha,100.0);if(std::fabs(nextAlpha-alpha)<1e-7){alpha=nextAlpha;break;}alpha=0.5*alpha+0.5*nextAlpha;converged=false;
+    }
+    return true;
+}
+}
+
+GLMResult AnalysisEngine::runCountModel(const DataSet& data,int yColumn,const QVector<int>& predictorColumns,const QVector<int>& rows,bool negativeBinomial){
+    GLMResult out;const auto use=analysisRows(data,rows);out.observations=use.size();out.predictors=predictorColumns.size();out.parameters=predictorColumns.size()+1;if(yColumn<0||yColumn>=data.columnCount()||predictorColumns.isEmpty())return out;
+    QSet<int> seen;for(int c:predictorColumns){if(c<0||c>=data.columnCount()||c==yColumn||data.variables()[c].type!=VariableType::Numeric)return out;seen.insert(c);}if(seen.size()!=predictorColumns.size())return out;
+    QVector<QVector<double>> X;QVector<double> y;X.reserve(use.size());y.reserve(use.size());
+    for(int r:use){bool bad=false,blank=false,missing=false,invalid=false;const QString yc=AnalysisEngine::classify(data,r,yColumn);if(yc=="Blank")blank=true;else if(yc=="DeclaredMissing")missing=true;else if(yc!="Valid")invalid=true;double vy=NAN;if(!blank&&!missing&&!invalid&&!AnalysisEngine::numericValue(data,r,yColumn,vy)){invalid=true;}if(!invalid&&!blank&&!missing&&(vy<0||std::fabs(vy-std::round(vy))>1e-9))invalid=true;QVector<double> xr;xr.push_back(1.0);for(int c:predictorColumns){const QString cls=AnalysisEngine::classify(data,r,c);double vx=NAN;if(cls=="Blank")blank=true;else if(cls=="DeclaredMissing")missing=true;else if(cls!="Valid"||!AnalysisEngine::numericValue(data,r,c,vx))invalid=true;xr.push_back(vx);}if(bad||blank||missing||invalid){if(blank)++out.excludedBlank;else if(missing)++out.excludedDeclaredMissing;else ++out.excludedNonNumeric;continue;}X.push_back(xr);y.push_back(vy);}
+    out.complete=y.size();if(out.complete<=out.parameters)return out;
+    double alpha=negativeBinomial?0.1:0.0;QVector<double> beta;QVector<QVector<double>> cov;bool singular=false,converged=false;int it=0;if(!fitCountGlm(X,y,negativeBinomial,alpha,beta,cov,it,singular,converged)){out.singular=singular;out.converged=false;out.iterations=it;return out;}out.singular=singular;out.converged=converged;out.iterations=it;out.dispersion=alpha;
+    QVector<double> mu(y.size());for(int i=0;i<y.size();++i){double e=0;for(int j=0;j<beta.size();++j)e+=X[i][j]*beta[j];mu[i]=safeExp(std::max(-30.0,std::min(30.0,e)));}
+    double meanY=0;for(double v:y)meanY+=v;meanY/=y.size();QVector<double> nullMu(y.size(),std::max(meanY,1e-12));if(negativeBinomial){double a=std::max(alpha,1e-12);out.nullLogLikelihood=0;for(int i=0;i<y.size();++i){const double yy=y[i],m=std::max(nullMu[i],1e-12),am=a*m;out.nullLogLikelihood+=AnalysisEngine::logGamma(yy+1.0/a)-AnalysisEngine::logGamma(1.0/a)-AnalysisEngine::logGamma(yy+1.0)+yy*std::log(std::max(am/(1.0+am),1e-300))-(1.0/a)*std::log1p(am);}}else out.nullLogLikelihood=poissonLogLik(y,nullMu);if(negativeBinomial){double a=std::max(alpha,1e-12);out.logLikelihood=0;for(int i=0;i<y.size();++i){const double yy=y[i],m=std::max(mu[i],1e-12),am=a*m;out.logLikelihood+=AnalysisEngine::logGamma(yy+1.0/a)-AnalysisEngine::logGamma(1.0/a)-AnalysisEngine::logGamma(yy+1.0)+yy*std::log(std::max(am/(1.0+am),1e-300))-(1.0/a)*std::log1p(am);}}else out.logLikelihood=poissonLogLik(y,mu);
+    out.deviance=poissonDeviance(y,mu);out.pearsonChiSquare=poissonPearson(y,mu);out.overdispersionRatio=out.pearsonChiSquare/std::max(1.0,static_cast<double>(out.complete-out.parameters));out.aic=-2.0*out.logLikelihood+2.0*out.parameters;out.bic=-2.0*out.logLikelihood+out.parameters*std::log(static_cast<double>(out.complete));out.pseudoR2=out.nullLogLikelihood==0?NAN:1.0-out.logLikelihood/out.nullLogLikelihood;
+    const double crit=1.95996398454;for(int j=0;j<beta.size();++j){GLMCoefficient c;c.term=j==0?"Intercept":data.variables()[predictorColumns[j-1]].name;c.estimate=beta[j];c.stdError=std::sqrt(std::max(0.0,cov[j][j]));if(c.stdError>0){c.z=c.estimate/c.stdError;c.p=2.0*(1.0-AnalysisEngine::normalCdf(std::fabs(c.z)));c.rateRatio=safeExp(c.estimate);c.ciLow=safeExp(c.estimate-crit*c.stdError);c.ciHigh=safeExp(c.estimate+crit*c.stdError);}out.coefficients.push_back(c);}return out;
+}
+
+GLMResult AnalysisEngine::poissonRegression(const DataSet& data,int yColumn,const QVector<int>& predictorColumns,const QVector<int>& rows){return runCountModel(data,yColumn,predictorColumns,rows,false);}
+GLMResult AnalysisEngine::negativeBinomialRegression(const DataSet& data,int yColumn,const QVector<int>& predictorColumns,const QVector<int>& rows){return runCountModel(data,yColumn,predictorColumns,rows,true);}
+
 TimeSeriesResult AnalysisEngine::timeSeriesAnalysis(const DataSet& data,int timeColumn,int valueColumn,int movingWindow,const QVector<int>& rows){
     TimeSeriesResult out;const auto use=analysisRows(data,rows);out.observations=use.size();out.movingWindow=std::max(1,movingWindow);QVector<double> y;QVector<int> src;QVector<QString> labels;
     for(int r:use){const QString cls=classify(data,r,valueColumn);if(cls=="Blank")++out.excludedBlank;else if(cls=="DeclaredMissing")++out.excludedDeclaredMissing;else if(cls!="Valid")++out.excludedNonNumeric;double v;if(cls=="Valid"&&numericValue(data,r,valueColumn,v)){y.push_back(v);src.push_back(r);labels.push_back(data.value(r,timeColumn).toString().trimmed());}}

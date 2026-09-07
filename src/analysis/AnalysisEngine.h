@@ -75,6 +75,18 @@ struct RegressionPredictionResult {
     double rSquared{NAN}, dfResidual{NAN}; QVector<RegressionPredictionRow> rows;
 };
 
+struct GLMCoefficient {
+    QString term; double estimate{NAN}, stdError{NAN}, z{NAN}, p{NAN}, rateRatio{NAN}, ciLow{NAN}, ciHigh{NAN};
+};
+struct GLMResult {
+    int observations{0}, complete{0}, predictors{0}, parameters{0};
+    int excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0}, iterations{0};
+    bool converged{false}, singular{false};
+    double logLikelihood{NAN}, nullLogLikelihood{NAN}, deviance{NAN}, pearsonChiSquare{NAN};
+    double aic{NAN}, bic{NAN}, pseudoR2{NAN}, dispersion{NAN}, overdispersionRatio{NAN};
+    QVector<GLMCoefficient> coefficients;
+};
+
 struct LogisticCoefficient {
     QString term; double estimate{NAN}, stdError{NAN}, z{NAN}, p{NAN}, oddsRatio{NAN}, ciLow{NAN}, ciHigh{NAN};
 };
@@ -145,6 +157,8 @@ public:
     static MultipleRegressionResult regressionWithCategoricalPredictors(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
     static RegressionPredictionResult regressionPrediction(const DataSet&, int xColumn, int yColumn, int movingWindow = 3, const QVector<int>& rows = {});
     static LogisticRegressionResult logisticRegression(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
+    static GLMResult poissonRegression(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
+    static GLMResult negativeBinomialRegression(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
     static TimeSeriesResult timeSeriesAnalysis(const DataSet&, int timeColumn, int valueColumn, int movingWindow = 3, const QVector<int>& rows = {});
     static EconometricResult econometricRobustOls(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
     static ADFResult augmentedDickeyFuller(const DataSet&, int valueColumn, const QVector<int>& rows = {});
@@ -165,5 +179,6 @@ private:
     static double logGamma(double x);
     static double regularizedBeta(double x, double a, double b);
     static double regularizedGammaQ(double a, double x);
+    static GLMResult runCountModel(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows, bool negativeBinomial);
 };
 }

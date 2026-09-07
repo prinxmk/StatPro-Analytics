@@ -73,6 +73,8 @@ private slots:
     void runRegressionDiagnostics();
     void runRegressionPrediction();
     void runLogisticRegression();
+    void runPoissonRegression();
+    void runNegativeBinomialRegression();
     void runTimeSeriesAnalysis();
     void runEconometricRobustOls();
     void runADFTest();
