@@ -67,6 +67,11 @@ private slots:
     void runMultipleLinearRegression();
     void runRegressionWithCategoricalPredictors();
     void runRegressionDiagnostics();
+    void runRegressionPrediction();
+    void runLogisticRegression();
+    void runTimeSeriesAnalysis();
+    void runEconometricRobustOls();
+    void runADFTest();
     void formatResultsTables();
     void undo();
     void redo();

@@ -58,6 +58,51 @@ struct RegressionDiagnosticRow {
     double leverage{NAN}, cooksDistance{NAN};
     bool highLeverage{false}, influential{false}, largeResidual{false};
 };
+struct RegressionPredictionRow {
+    int observation{0}; double x{NAN}, actual{NAN}, fitted{NAN}, residual{NAN};
+    double meanCiLow{NAN}, meanCiHigh{NAN}, predictionLow{NAN}, predictionHigh{NAN};
+};
+struct RegressionPredictionResult {
+    int observations{0}, complete{0}; double intercept{NAN}, slope{NAN}, rmse{NAN}, meanX{NAN}, sxx{NAN};
+    double rSquared{NAN}, dfResidual{NAN}; QVector<RegressionPredictionRow> rows;
+};
+
+struct LogisticCoefficient {
+    QString term; double estimate{NAN}, stdError{NAN}, z{NAN}, p{NAN}, oddsRatio{NAN}, ciLow{NAN}, ciHigh{NAN};
+};
+struct LogisticRegressionResult {
+    int observations{0}, complete{0}, excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
+    int predictors{0}, parameters{0}, iterations{0}; bool converged{false}, singular{false};
+    double logLikelihood{NAN}, nullLogLikelihood{NAN}, minus2LogLikelihood{NAN}, aic{NAN}, bic{NAN};
+    double mcfaddenR2{NAN}, accuracy{NAN}, sensitivity{NAN}, specificity{NAN};
+    int truePositive{0}, trueNegative{0}, falsePositive{0}, falseNegative{0};
+    QVector<LogisticCoefficient> coefficients;
+};
+
+struct TimeSeriesRow {
+    int observation{0}; QString time; double value{NAN}, lag1{NAN}, difference{NAN}, percentChange{NAN}, movingAverage{NAN};
+};
+struct TimeSeriesResult {
+    int observations{0}, valid{0}, excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
+    int movingWindow{3}; double mean{NAN}, stdDev{NAN}, min{NAN}, max{NAN}, trendSlope{NAN}, trendR2{NAN};
+    double firstDifferenceMean{NAN}, firstDifferenceSd{NAN}, acf1{NAN};
+    QVector<TimeSeriesRow> rows;
+};
+
+struct EconometricCoefficient {
+    QString term; double estimate{NAN}, robustStdError{NAN}, zOrT{NAN}, pValue{NAN}, ciLow{NAN}, ciHigh{NAN};
+};
+struct EconometricResult {
+    int observations{0}, complete{0}, predictors{0}, parameters{0};
+    int excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
+    bool singular{false}; double rSquared{NAN}, adjustedRSquared{NAN}, rmse{NAN};
+    double f{NAN}, fP{NAN}, durbinWatson{NAN};
+    double breuschPaganLM{NAN}, breuschPaganP{NAN}; QVector<EconometricCoefficient> coefficients;
+};
+struct ADFResult {
+    int observations{0}, valid{0}; double statistic{NAN}; QString conclusion; double critical1{NAN}, critical5{NAN}, critical10{NAN};
+};
+
 struct RegressionDiagnosticsResult {
     int observations{0}, complete{0}, excludedBlank{0}, excludedDeclaredMissing{0}, excludedNonNumeric{0};
     int predictors{0}, parameters{0};
@@ -86,6 +131,11 @@ public:
     static RegressionResult simpleLinearRegression(const DataSet&, int xColumn, int yColumn, const QVector<int>& rows = {});
     static MultipleRegressionResult multipleLinearRegression(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
     static MultipleRegressionResult regressionWithCategoricalPredictors(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
+    static RegressionPredictionResult regressionPrediction(const DataSet&, int xColumn, int yColumn, int movingWindow = 3, const QVector<int>& rows = {});
+    static LogisticRegressionResult logisticRegression(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
+    static TimeSeriesResult timeSeriesAnalysis(const DataSet&, int timeColumn, int valueColumn, int movingWindow = 3, const QVector<int>& rows = {});
+    static EconometricResult econometricRobustOls(const DataSet&, int yColumn, const QVector<int>& predictorColumns, const QVector<int>& rows = {});
+    static ADFResult augmentedDickeyFuller(const DataSet&, int valueColumn, const QVector<int>& rows = {});
     static RegressionDiagnosticsResult regressionDiagnostics(const DataSet&, const QVector<int>& predictorColumns, int yColumn, const QVector<int>& rows = {});
 
     static QString number(double value);
